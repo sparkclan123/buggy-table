@@ -83,6 +83,7 @@ impl Profile {
 
     pub fn info(&self, id: String, version: String, tables: Vec<TableInfo>) -> ConnectionInfo {
         ConnectionInfo {
+            engine: Engine::Postgres,
             id,
             name: self.name.clone(),
             host: self.host.clone(),

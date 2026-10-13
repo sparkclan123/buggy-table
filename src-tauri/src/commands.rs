@@ -63,3 +63,11 @@ pub async fn save_table_changes(
 ) -> AppResult<SaveResult> {
     state.save(request).await
 }
+
+#[tauri::command]
+pub async fn redis_command(
+    state: State<'_, Workbench>,
+    request: RedisRequest,
+) -> AppResult<RedisResult> {
+    state.redis_command(request).await
+}

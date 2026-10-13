@@ -5,7 +5,7 @@ use sqlparser::{
         BinaryOperator, Expr, Ident, LimitClause, OrderByKind, SelectItem, SetExpr, Statement,
         TableFactor, UnaryOperator, Value,
     },
-    dialect::PostgreSqlDialect,
+    dialect::{Dialect, MySqlDialect, PostgreSqlDialect},
     parser::Parser,
 };
 
@@ -37,16 +37,32 @@ fn identifier(ident: &Ident) -> String {
 }
 
 pub fn approve(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
+    approve_dialect(sql, tables, &PostgreSqlDialect {})
+}
+
+pub fn approve_mysql(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
+    // Keep parsing independent of server SQL modes and executable comments.
+    if sql.contains('\\') || sql.contains("/*") || sql.contains('"') {
+        return Err(AppError::policy(
+            "Use backticks for MySQL identifiers and plain single-quoted literals; backslashes and block comments are disabled.",
+        ));
+    }
+    approve_dialect(sql, tables, &MySqlDialect {})
+}
+
+fn approve_dialect(
+    sql: &str,
+    tables: &[TableInfo],
+    dialect: &dyn Dialect,
+) -> AppResult<ApprovedQuery> {
     if sql.is_empty() || sql.len() > MAX_SQL_BYTES {
         return Err(AppError::policy("Use a query between 1 and 32,768 bytes."));
     }
-    let statements = Parser::new(&PostgreSqlDialect {})
+    let statements = Parser::new(dialect)
         .with_recursion_limit(32)
         .try_with_sql(sql)
         .and_then(|mut parser| parser.parse_statements())
-        .map_err(|_| {
-            AppError::policy("This SQL could not be parsed as a supported PostgreSQL SELECT.")
-        })?;
+        .map_err(|_| AppError::policy("This SQL could not be parsed as a supported SELECT."))?;
     if statements.len() != 1 {
         return Err(AppError::policy(
             "Run exactly one SELECT statement at a time.",

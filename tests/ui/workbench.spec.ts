@@ -268,3 +268,96 @@ test('multiple filters support AND, OR, removal and tab persistence', async ({
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(page.getByText('10 rows shown')).toBeVisible();
 });
+
+test('engine selection sets defaults and restricts manual editing to PostgreSQL', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect database', exact: true }).click();
+  await page.getByLabel('Password', { exact: true }).fill('DO_NOT_RETAIN');
+  await page.getByLabel('Database engine').selectOption('mysql');
+  await expect(page.getByLabel('Port', { exact: true })).toHaveValue('3306');
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Schema', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Allow manual cell edits')).toHaveCount(0);
+  await expect(page.getByText(/SELECT \/ SHOW VIEW grants only/)).toBeVisible();
+  await page.getByLabel('Database engine').selectOption('redis');
+  await expect(page.getByLabel('Port', { exact: true })).toHaveValue('6379');
+  await expect(page.getByLabel('Database number', { exact: true })).toHaveValue('0');
+  await expect(page.getByLabel('Username', { exact: true })).not.toHaveAttribute('required');
+  await page.getByLabel('Database engine').selectOption('postgres');
+  await expect(page.getByLabel('Port', { exact: true })).toHaveValue('5432');
+  await expect(page.getByLabel('Schema', { exact: true })).toHaveValue('public');
+  await expect(page.getByLabel('Allow manual cell edits')).toBeVisible();
+});
+
+test('Redis UI scans, inspects TTL, displays values as text, and refreshes without navigation', async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    // IPC contract stub for browser UI coverage. Rust integration tests use real Redis.
+    const target = window as unknown as Record<string, unknown>;
+    target.isTauri = true;
+    target.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: 'main' } },
+      transformCallback: () => 1,
+      invoke: async (cmd: string, payload: { request?: Record<string, unknown> }) => {
+        if (cmd.startsWith('plugin:')) return 1;
+        if (cmd === 'connect')
+          return {
+            id: 'redis-fixture',
+            engine: 'redis',
+            name: 'Redis UI fixture',
+            host: '127.0.0.1',
+            port: 16379,
+            database: '0',
+            schema: '0',
+            username: 'reader',
+            tls: 'localOnly',
+            manualEdits: false,
+            serverVersion: 'Redis',
+            tables: [],
+          };
+        if (cmd === 'redis_command') {
+          const args = payload.request?.args as string[];
+          if (args[0] === 'SCAN') return { value: ['0', ['test:key']], elapsedMs: 1 };
+          if (args[0] === 'TYPE') return { value: 'string', elapsedMs: 1 };
+          if (args[0] === 'TTL') return { value: '90', elapsedMs: 1 };
+          if (args[0] === 'GET')
+            return { value: { preview: '<script>window.INJECTED=true</script>' }, elapsedMs: 1 };
+          if (args[0] === 'PING') return { value: 'PONG', elapsedMs: 1 };
+          if (args[0] === 'INFO') return { value: `${args[1]} fixture information`, elapsedMs: 1 };
+          throw { code: 'POLICY_DENIED', message: 'Only bounded reads are allowed.' };
+        }
+        return null;
+      },
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect database', exact: true }).click();
+  await page.getByLabel('Database engine').selectOption('redis');
+  await page.getByRole('button', { name: 'Connect securely' }).click();
+  await expect(page.getByRole('region', { name: 'Redis workspace' })).toBeVisible();
+  await page.getByRole('button', { name: 'test:key', exact: true }).click();
+  await expect(page.getByText('string · TTL: 90 seconds')).toBeVisible();
+  await expect(page.getByLabel('Redis value')).toContainText('<script>');
+  expect(
+    await page.evaluate(() => (window as unknown as Record<string, unknown>).INJECTED),
+  ).toBeUndefined();
+  await page.getByRole('button', { name: 'Run command', exact: true }).click();
+  await expect(page.getByLabel('Redis value')).toContainText('PONG');
+  await page.getByLabel('Redis command', { exact: true }).fill('["FLUSHALL"]');
+  await page.getByRole('button', { name: 'Run command', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Only bounded reads');
+  await page.keyboard.press('Control+r');
+  await expect(page.getByRole('button', { name: 'test:key', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(
+    await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length })),
+  ).toEqual({ local: 0, session: 0 });
+  await page.screenshot({ path: testInfo.outputPath('redis-workspace.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Database overview', exact: true }).click();
+  await expect(page.getByLabel('Redis value')).toContainText('server fixture information');
+  await page.getByRole('button', { name: 'memory', exact: true }).click();
+  await expect(page.getByLabel('Redis value')).toContainText('memory fixture information');
+});

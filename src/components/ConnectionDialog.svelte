@@ -1,12 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Database, LockKeyhole, X, ArrowRight, ShieldCheck } from '@lucide/svelte';
-  import type { ConnectRequest, ConnectionInfo, TlsMode } from '../lib/types';
+  import type { ConnectRequest, ConnectionInfo, TlsMode, Engine } from '../lib/types';
   import { api, errorMessage } from '../lib/api';
   let {
     onconnected,
     onclose,
   }: { onconnected: (connection: ConnectionInfo) => void; onclose: () => void } = $props();
+  let engine = $state<Engine>('postgres');
+  function changeEngine() {
+    port = engine === 'postgres' ? 5432 : engine === 'mysql' ? 3306 : 6379;
+    name = `Local ${engine === 'postgres' ? 'PostgreSQL' : engine === 'mysql' ? 'MySQL' : 'Redis'}`;
+    database = engine === 'redis' ? '0' : '';
+    schema = engine === 'postgres' ? 'public' : '';
+    manualEdits = engine === 'postgres';
+    password = '';
+    error = '';
+  }
   let name = $state('Local PostgreSQL');
   let host = $state('127.0.0.1');
   let port = $state(5432);
@@ -27,15 +37,16 @@
     busy = true;
     error = '';
     const request: ConnectRequest = {
+      engine,
       name,
       host,
       port,
       database,
       username,
       password,
-      schema,
+      schema: engine === 'postgres' ? schema : database,
       tls,
-      manualEdits,
+      manualEdits: engine === 'postgres' && manualEdits,
     };
     password = '';
     try {
@@ -69,10 +80,14 @@
   </div>
   <h2 id="connection-title">Connect your database</h2>
   <p class="muted">A direct connection. Your credentials stay in this app session.</p>
-  <div class="engine-choice">
-    <Database size={19} /><strong>PostgreSQL</strong><span class="badge">Direct connection</span>
-  </div>
   <form onsubmit={submit} autocomplete="off">
+    <label
+      >Database engine<select bind:value={engine} onchange={changeEngine} disabled={busy}>
+        <option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option
+          value="redis">Redis</option
+        >
+      </select></label
+    >
     <label
       >Connection name<input
         bind:value={name}
@@ -87,21 +102,22 @@
     </div>
     <div class="form-row">
       <label
-        >Database<input
+        >{engine === 'redis' ? 'Database number' : 'Database'}<input
           bind:value={database}
           required
           maxlength="253"
           placeholder="my_database"
           spellcheck="false"
         /></label
-      ><label>Schema<input bind:value={schema} required maxlength="253" spellcheck="false" /></label
-      >
+      >{#if engine === 'postgres'}<label
+          >Schema<input bind:value={schema} required maxlength="253" spellcheck="false" /></label
+        >{/if}
     </div>
     <div class="form-row">
       <label
         >Username<input
           bind:value={username}
-          required
+          required={engine !== 'redis'}
           maxlength="253"
           placeholder="database_user"
           autocomplete="off"
@@ -123,13 +139,18 @@
         ></select
       ></label
     >
-    <label class="checkbox-label"
-      ><input type="checkbox" bind:checked={manualEdits} />Allow manual cell edits</label
-    >
+    {#if engine === 'postgres'}<label class="checkbox-label"
+        ><input type="checkbox" bind:checked={manualEdits} />Allow manual cell edits</label
+      >
+    {/if}
     <div class="info-note">
       <ShieldCheck size={18} /><span
-        >Save applies only the cell edits you make, using your database permissions. SQL stays
-        read-only. Turn off manual edits to require a restricted reader account.</span
+        >{#if engine === 'postgres'}Save applies only the cell edits you make, using your database
+          permissions. SQL stays read-only. Turn off manual edits to require a restricted reader
+          account.{:else if engine === 'mysql'}MySQL 8.x · read-only. Use a dedicated account with
+          SELECT / SHOW VIEW grants only. Roles and write privileges are rejected.{:else}Redis ·
+          read-only commands. Use a restricted ACL user; the app does not change your server
+          permissions. Standalone endpoints only.{/if}</span
       >
     </div>
     {#if error}<div class="error-banner" role="alert">{error}</div>{/if}

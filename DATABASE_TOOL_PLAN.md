@@ -368,6 +368,8 @@ Custom functions, views หรือ server extensions อาจเปลี่�
 
 ### 8.2 การบังคับ network
 
+อัปเดตตามคำขอ 2026-10-14: signed distribution build มี GitHub updater แบบ opt-out โดยไม่ส่งข้อมูล DB; default/development build ปิด updater ไว้ รายละเอียดและข้อจำกัดอยู่ใน `docs/DISTRIBUTION.md` ส่วน strict privacy build ด้านล่างยังเป็นเป้าหมายแยก ไม่อ้างว่า signed distribution ไม่มี network traffic.
+
 - Assets, fonts, icons และ documentation ที่จำเป็น bundle ในแอป; ไม่มี CDN
 - CSP จำกัด scripts/resources และการเชื่อมต่อให้พอดีกับ Tauri IPC ของ production build; ทดสอบ allowlist จริง ไม่ใช้ wildcard เพื่อแก้ปัญหา
 - ปิด remote navigation, popup, auto link preview, remote images, HTML rendering จาก DB/AI และการ fetch URL ที่ปรากฏในข้อมูล
@@ -777,3 +779,8 @@ SQLite ต้องเปิดด้วย read-only mode และเพิ่
 - Distribution: [Windows installer](https://v2.tauri.app/distribute/windows-installer/) · [macOS signing](https://v2.tauri.app/distribute/sign/macos/)
 
 **การตัดสินใจที่แนะนำ:** เริ่มด้วย Tauri + Rust + Svelte/TypeScript, ส่ง PostgreSQL read-only vertical slice ให้ผ่าน security/performance gates ก่อน แล้วเพิ่ม MySQL, Redis, monitoring และ local AI ผ่าน contracts เดิม วิธีนี้ทำให้มีของใช้ได้เร็ว พร้อมรักษาขอบเขตความปลอดภัยและโครงสร้างที่ขยายต่อได้
+
+
+## Implementation update — 2026-10-14
+
+MySQL 8.x and standalone Redis adapters are now implemented in read-only mode. MySQL uses mysql_async with native TLS, direct read-grant validation and the bounded SELECT path; Redis uses redis-rs, explicit command/argument validation and a bounded transport. SQL tables reuse the existing tabs/filter/sort interface; Redis has a key browser and INFO views. PostgreSQL alone currently supports explicit manual cell saves. The full plugin system, AI, broader versions, MySQL writes and Redis Cluster/Sentinel remain roadmap work. See docs/SECURITY_REVIEW.md and docs/VALIDATION.md for tested scope and remaining advisories.

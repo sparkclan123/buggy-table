@@ -17,7 +17,7 @@
 - 200 rows per browser page; raw SELECT results stop after 1,000 rows or 4 MiB. The UI receives one bounded result, not a complete streaming IPC protocol yet.
 - CodeMirror loads only when the SQL tab is opened.
 - Monitoring is manual refresh, not a background collector. No history is persisted.
-- Local AI, MySQL and Redis are intentionally not callable until their security contracts/tests exist.
+- Local AI remains unavailable. MySQL/Redis are read-only adapters with their own policy and integration fixtures; see SECURITY_REVIEW.md.
 
 ## PostgreSQL security boundary
 
@@ -70,11 +70,11 @@ Each table tab owns filter drafts/applied conditions, match mode, sort direction
 5. Add UI in a focused component. Preserve an understandable unavailable state rather than inventing data.
 6. Run formatting, checks, relevant tests and a native smoke test when IPC/platform behavior changes.
 
-When a second database adapter is implemented, extract the shared adapter contract from the two actual implementations. Do not add unused abstractions beforehand. Security policy and credential ownership stay in the mandatory core.
+Sessions now use an explicit Postgres/Mysql/Redis enum. Shared job limits and cancellation remain in service.rs; each adapter owns protocol behavior. Redis has a separate typed command endpoint/UI instead of pretending keys are SQL tables. No dynamic plugin system or blanket raw-command method exists. Security policy and credential ownership stay in the mandatory core.
 
 ## Test fixture
 
-`compose.yaml` binds only `127.0.0.1:15432`, uses disposable PostgreSQL storage and synthetic data. The committed credentials are fixture credentials, not deployment secrets. Integration tests deliberately grant/revoke permissions and acquire locks on these fixture tables. They must never be pointed at another database.
+`compose.yaml` binds PostgreSQL/MySQL/Redis only to loopback ports 15432/13306/16379. PostgreSQL/MySQL use tmpfs; Redis persistence is disabled. All data and accounts are disposable fixtures. The committed credentials are fixture credentials, not deployment secrets. Integration tests deliberately grant/revoke permissions and acquire locks on these fixture tables. They must never be pointed at another database.
 
 Read-only and mutation tests operate at two levels: application policy and the server role directly without the application. Cancellation is tested with a blocked query, and precision tests cover bigint beyond JavaScript's integer range, exact decimal strings and NULL.
 
@@ -83,3 +83,9 @@ For native release testing, open the packaged app, connect to the fixture, brows
 ## Compact UI and resource use
 
 The result grid has neutral text and fixed 28 px rows. Column widths (72-800 px) use colgroup/table-layout:fixed, pointer capture for drag resizing, keyboard arrow controls and double-click reset. One ResizeObserver determines the visible row range plus overscan. Column metadata is indexed once per table instead of searched for each rendered cell. No grid library or new runtime dependency was added. The old modal cell editor and duplicate/decorative CSS were removed. CSS asset size is measured in validation; this is not a measured RAM reduction. Actual memory remains dependent on WebView, loaded results and open table tabs.
+
+## Additional database adapters
+
+See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for MySQL/Redis boundaries, dependency findings and residual limits. MySQL uses mysql_async with native TLS and prepared filter values; numeric/decimal values remain strings. Redis uses redis-rs with an 8 MiB wire-budget wrapper, explicit driver-task ownership and no automatic redirect/reconnect. MySQL normalizes its session SQL mode and requires direct read grants. These engines reject manual writes regardless of IPC flags.
+
+UI tests start a production preview on port 1420 (close any dev server on that port first). This tests the bundled lazy SQL editor without Vite dev dependency reloads. Failure traces are uploaded by CI.

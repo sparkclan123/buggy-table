@@ -2,10 +2,24 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
   "description": "Only the local main window can use database APIs and guard window closing.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
-    "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-destroy",
-    "allow-connect", "allow-disconnect", "allow-run-query", "allow-cancel-query",
-    "allow-browse-table", "allow-inspect-table", "allow-get-overview", "allow-save-table-changes"
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-destroy",
+    "allow-connect",
+    "allow-disconnect",
+    "allow-run-query",
+    "allow-cancel-query",
+    "allow-browse-table",
+    "allow-inspect-table",
+    "allow-get-overview",
+    "allow-save-table-changes",
+    "allow-redis-command",
+    "allow-check-update",
+    "allow-install-update",
+    "core:window:allow-set-theme"
   ]
 }

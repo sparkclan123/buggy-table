@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 fn request() -> ConnectRequest {
     ConnectRequest {
+        engine: Engine::Postgres,
         name: "Test reader".into(),
         host: "127.0.0.1".into(),
         port: 15432,

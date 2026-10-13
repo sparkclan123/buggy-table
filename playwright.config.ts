@@ -9,9 +9,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'pnpm dev',
+    command: 'pnpm build && pnpm preview --port 1420 --strictPort',
     url: 'http://127.0.0.1:1420',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
+    timeout: 120_000,
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },

@@ -1,12 +1,17 @@
 name: Check
 on: [push, pull_request]
 
+concurrency:
+  group: check-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   desktop:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -24,7 +29,7 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:rust
       - run: pnpm lint:rust
-      - run: pnpm tauri build --no-bundle
+      - run: pnpm tauri build --debug --no-bundle
 
   integration:
     runs-on: ubuntu-latest
@@ -41,5 +46,11 @@ jobs:
       - run: pnpm test:integration
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:ui
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-failure-traces
+          path: test-results/
+          retention-days: 7
       - if: always()
         run: docker compose down
