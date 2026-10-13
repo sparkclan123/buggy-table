@@ -169,10 +169,10 @@ pre,
   margin-top: 2px;
 }
 .brand-mark {
+  object-fit: contain;
+  border-radius: 4px;
+  flex: none;
   display: flex;
-}
-.brand-light {
-  font-weight: 400;
 }
 .nav-label {
   padding: 7px 6px 4px;

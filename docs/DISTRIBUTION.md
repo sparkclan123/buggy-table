@@ -1,4 +1,6 @@
-# ตัวติดตั้งและอัปเดต Table Por
+# ตัวติดตั้งและอัปเดต buggy-table
+
+ชื่อแอป/ตัวติดตั้งใหม่คือ `buggy-table` ส่วน bundle identifier `dev.tablepor.desktop`, library crate และ preference/signing-key paths เดิมยังคงไว้ เพื่อรักษาความต่อเนื่องของการติดตั้งและค่าที่บันทึกไว้
 
 ## โครงสร้างที่เตรียมให้
 

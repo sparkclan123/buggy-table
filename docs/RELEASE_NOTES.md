@@ -1,4 +1,4 @@
-Table Por 0.1.0
+buggy-table 0.1.0
 
 - Browse PostgreSQL, MySQL and Redis with bounded queries and direct connections.
 - Edit permitted PostgreSQL cells, use multiple table tabs and combine filters.

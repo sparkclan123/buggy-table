@@ -1,4 +1,5 @@
 <script lang="ts">
+  import brandIcon from '../assets/buggy-table-icon.png';
   import {
     Database,
     Table2,
@@ -457,14 +458,14 @@
 </script>
 
 <svelte:head
-  ><title>Table Por · {isSample ? 'Sample workspace' : connection.name}</title></svelte:head
+  ><title>buggy-table · {isSample ? 'Sample workspace' : connection.name}</title></svelte:head
 >
 
 <div class="app-shell" inert={updating}>
   <aside class="sidebar">
     <button class="brand" onclick={() => navigate('explorer')} disabled={busy}
-      ><span class="brand-mark"><Table2 size={22} /></span><span
-        >table<span class="brand-light">por</span><small>DATABASE CLIENT</small></span
+      ><img class="brand-mark" src={brandIcon} alt="" width="32" height="32" /><span
+        >buggy-table<small>DATABASE CLIENT</small></span
       ></button
     >
     <div class="nav-label">WORKSPACE</div>
@@ -545,7 +546,7 @@
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
-      <div class="sidebar-version"><span>Table Por</span><span>v{__APP_VERSION__}</span></div>
+      <div class="sidebar-version"><span>buggy-table</span><span>v{__APP_VERSION__}</span></div>
     </div>
   </aside>
 

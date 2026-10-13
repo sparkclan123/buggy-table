@@ -153,7 +153,7 @@ pub async fn install_update(
     update.install(&bytes).map_err(|_| {
         AppError::new(
             "UPDATE_INSTALL",
-            "Installation failed. Close other copies of Table Por and try again.",
+            "Installation failed. Close other copies of buggy-table and try again.",
         )
     })?;
     app.restart();

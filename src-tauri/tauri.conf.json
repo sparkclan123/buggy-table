@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Table Por",
+  "productName": "buggy-table",
   "version": "0.1.0",
   "identifier": "dev.tablepor.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Table Por",
+        "title": "buggy-table",
         "width": 1380,
         "height": 880,
         "minWidth": 1000,

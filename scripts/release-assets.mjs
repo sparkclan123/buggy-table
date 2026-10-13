@@ -17,7 +17,7 @@ export function collect(version, platform, bundle, output) {
   const signed = files.filter((file) => file.endsWith(`${extension}.sig`));
   if (signed.length !== 1) throw new Error(`Expected exactly one signed ${extension} artifact`);
   const source = signed[0].slice(0, -4);
-  const filename = `Table-Por_${version}_${platform}${extension}`;
+  const filename = `buggy-table_${version}_${platform}${extension}`;
   const signature = readFileSync(signed[0], 'utf8').trim();
   if (!signature || !/^[A-Za-z0-9+/=]+$/.test(signature))
     throw new Error('Invalid updater signature');
@@ -27,7 +27,7 @@ export function collect(version, platform, bundle, output) {
   if (platform.startsWith('darwin')) {
     const installers = files.filter((file) => file.endsWith('.dmg'));
     if (installers.length !== 1) throw new Error('Expected exactly one DMG installer');
-    copyFileSync(installers[0], join(output, `Table-Por_${version}_${platform}.dmg`));
+    copyFileSync(installers[0], join(output, `buggy-table_${version}_${platform}.dmg`));
   }
   const entry = {
     version,

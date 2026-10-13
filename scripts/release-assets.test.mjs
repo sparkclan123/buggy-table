@@ -12,10 +12,10 @@ test('release manifest covers every architecture and points to unique signed pac
     for (const platform of platforms) {
       const bundle = join(root, platform);
       mkdirSync(bundle);
-      const file = platform.startsWith('darwin') ? 'Table Por.app.tar.gz' : 'Table Por.exe';
+      const file = platform.startsWith('darwin') ? 'buggy-table.app.tar.gz' : 'buggy-table.exe';
       writeFileSync(join(bundle, file), platform);
       writeFileSync(join(bundle, `${file}.sig`), 'c2lnbmF0dXJl');
-      if (platform.startsWith('darwin')) writeFileSync(join(bundle, 'Table Por.dmg'), platform);
+      if (platform.startsWith('darwin')) writeFileSync(join(bundle, 'buggy-table.dmg'), platform);
       collect('0.1.0', platform, bundle, output);
     }
     const result = manifest('0.1.0', output, 'Notes');

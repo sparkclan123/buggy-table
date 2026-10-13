@@ -243,6 +243,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "buggy-table"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "minisign-verify",
+ "mysql_async",
+ "native-tls",
+ "postgres-native-tls",
+ "redis",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-updater",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3765,30 +3789,6 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
-]
-
-[[package]]
-name = "table-por"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "futures-util",
- "minisign-verify",
- "mysql_async",
- "native-tls",
- "postgres-native-tls",
- "redis",
- "serde",
- "serde_json",
- "sqlparser",
- "tauri",
- "tauri-build",
- "tauri-plugin-updater",
- "tokio",
- "tokio-native-tls",
- "tokio-postgres",
- "uuid",
- "zeroize",
 ]
 
 [[package]]

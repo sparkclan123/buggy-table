@@ -22,7 +22,7 @@ if (version === '--check') {
   const lock = 'src-tauri/Cargo.lock';
   writeFileSync(
     lock,
-    readFileSync(lock, 'utf8').replace(/(name = "table-por"\nversion = ")[^"]+/, `$1${version}`),
+    readFileSync(lock, 'utf8').replace(/(name = "buggy-table"\nversion = ")[^"]+/, `$1${version}`),
   );
   console.log(
     `Set version ${version}. Update docs/RELEASE_NOTES.md, validate, commit and tag v${version}.`,

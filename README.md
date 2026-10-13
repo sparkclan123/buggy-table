@@ -1,4 +1,4 @@
-# Table Por
+# buggy-table
 
 A personal, local-first database workspace built with **Rust, Tauri 2, Svelte and TypeScript**.
 
@@ -169,6 +169,6 @@ pnpm tauri build --bundles app
 pnpm tauri build --bundles nsis
 ```
 
-ผล build macOS อยู่ที่ `src-tauri/target/release/bundle/macos/Table Por.app` เป็น local preview build ยังไม่มี Developer ID signing/notarization สำหรับเผยแพร่ทั่วไป Windows ต้อง build และตรวจ native behavior บน Windows จริงก่อนรับรอง
+ผล build macOS อยู่ที่ `src-tauri/target/release/bundle/macos/buggy-table.app` เป็น local preview build ยังไม่มี Developer ID signing/notarization สำหรับเผยแพร่ทั่วไป Windows ต้อง build และตรวจ native behavior บน Windows จริงก่อนรับรอง
 
 อ่านรายละเอียดการพัฒนาและขอบเขตความปลอดภัยใน [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), ผลตรวจใน [docs/VALIDATION.md](docs/VALIDATION.md) และแผนเต็มใน [DATABASE_TOOL_PLAN.md](DATABASE_TOOL_PLAN.md)

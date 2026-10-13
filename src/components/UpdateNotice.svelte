@@ -109,7 +109,7 @@
     {#if open}
       <section class="update-panel" aria-label="Application updates">
         <div class="update-heading">
-          <strong>Table Por · v{__APP_VERSION__}</strong><button
+          <strong>buggy-table · v{__APP_VERSION__}</strong><button
             class="button"
             aria-label="Close update menu"
             disabled={installing}

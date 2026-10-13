@@ -1,7 +1,7 @@
 [package]
-name = "table-por"
+name = "buggy-table"
 version = "0.1.0"
-description = "A local, read-only database workspace"
+description = "A local database workspace with guarded queries and explicit table saves"
 edition = "2024"
 rust-version = "1.90"
 publish = false
@@ -11,7 +11,7 @@ name = "table_por"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "table-por"
+name = "buggy-table"
 path = "src/main.rs"
 required-features = ["desktop"]
 

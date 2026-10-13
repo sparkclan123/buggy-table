@@ -45,3 +45,12 @@ Performance budgets in `DATABASE_TOOL_PLAN.md` remain targets. Bundle size alone
 - Windows CI build configuration was added; it has not been run here.
 
 - A concurrent frontend production build and Vite development-server UI run produced two blank-page test failures with a Svelte module initialization error. Running the UI suite separately after the build passed all 12 then-current cases; do not run these operations simultaneously against the same Vite cache.
+
+## Dark appearance, signed distribution and buggy-table branding — 2026-10-14
+
+- Renamed the displayed app, package/binary, installer and release assets to `buggy-table`. Generated macOS `.icns` and Windows `.ico` from the user-supplied logo using Tauri's contain fit; preserved the complete image. Bundle ID and preference/key paths stay stable.
+- Passed 38 UI cases across Chromium and WebKit, including dark/system preference persistence, inline controls/SQL editor, update offer/error/progress, disabled automatic checks, and dirty-tab installation guards. Native macOS dark appearance and real updater IPC were checked; the unpublished feed returns a handled error.
+- Passed 7 Rust unit tests, 18 PostgreSQL and 8 multi-engine integration tests, 3 Vitest tests and 1 release-manifest test. Svelte/TypeScript, Clippy, rustfmt, Prettier and actionlint pass locally.
+- Built local Mac ARM `.app`, `.dmg` and signed updater archive; validated DMG checksum and updater signature/public key/bound version. A corrupted copy was rejected with `InvalidSignature`. OS certificate/notarization and two-version installation are still pending owner-provided signing secrets.
+- GitHub Windows checks exposed CRLF checkout differences; added `.gitattributes` to keep source text LF across platforms. Fresh CI runs validate the renamed installers.
+- JavaScript dependency audit: 0 advisories. Cargo still reports the two existing quick-xml advisories documented in SECURITY_REVIEW.md; no advisory suppression.
