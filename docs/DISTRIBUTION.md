@@ -2,16 +2,26 @@
 
 ชื่อแอป/ตัวติดตั้งใหม่คือ `buggy-table` ส่วน bundle identifier `dev.tablepor.desktop`, library crate และ preference/signing-key paths เดิมยังคงไว้ เพื่อรักษาความต่อเนื่องของการติดตั้งและค่าที่บันทึกไว้
 
+## เริ่มโดยยังไม่มีใบรับรอง
+
+ดู [คำสั่งรันแอปและปล่อยรุ่นทดสอบ](RELEASE_QUICKSTART.md) สำหรับรุ่นฟรีที่ยังไม่เซ็นด้วย Apple/Windows รุ่นนี้เป็น Pre-release, ไม่มี `latest.json` และปิด updater เพื่อไม่ให้ถูกเสนอเป็นอัปเดตของรุ่นที่เซ็นแล้ว
+
+ขณะเตรียมรุ่น 0.1.0 ตั้ง `TAURI_SIGNING_PRIVATE_KEY` ใน GitHub Environment `release` แล้ว แต่ยังไม่มี Apple/Azure credentials หรือ `RELEASES_TOKEN` การอัปโหลดรุ่นทดสอบด้วย GitHub CLI บนเครื่องเจ้าของ repo ใช้บัญชีที่ล็อกอินอยู่ จึงยังไม่ต้องสร้าง `RELEASES_TOKEN`
+
+สำหรับการแจกแบบเซ็น: สมัคร [Apple Developer Program](https://developer.apple.com/programs/enroll/) (US$99/ปี ราคาท้องถิ่นอาจต่างกัน) แล้วสร้าง Developer ID Application certificate และส่งออก `.p12` พร้อม private key สำหรับ CI
+
+**ตรวจประเทศก่อนเลือก Azure:** ตาม [เงื่อนไข Public Trust](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) ที่ตรวจเมื่อ 14 ตุลาคม 2026 บุคคลทั่วไปต้องอยู่สหรัฐฯ หรือแคนาดา และประเทศไทยไม่อยู่ในรายชื่อประเทศขององค์กรที่รองรับ หากสมัครในไทย ต้องเลือกผู้ให้บริการ code-signing CA ที่รองรับผู้สมัครของคุณ หรือประเมิน Microsoft Store/MSIX แทน Workflow ปัจจุบันเตรียม Azure ไว้ แต่ยังไม่ผ่านการตั้งค่าบัญชีจริง และต้องปรับ integration หากเลือกผู้ให้บริการอื่น อย่าสมัคร Azure เสียเงินก่อนตรวจสิทธิ์นี้
+
 ## โครงสร้างที่เตรียมให้
 
-- ซอร์ส: `sparkclan123/buggy-table` (ขณะตั้งค่ายังเป็น **public**; ไม่ได้เปลี่ยน visibility)
+- ซอร์ส: `sparkclan123/buggy-table` (ตรวจล่าสุดเป็น **private**)
 - ไฟล์แจก: https://github.com/sparkclan123/buggy-table-releases
 - macOS Apple Silicon → `.dmg` / updater `.app.tar.gz`
 - macOS Intel → `.dmg` / updater `.app.tar.gz` คนละไฟล์กับ ARM
 - Windows x64 → NSIS `.exe` ใช้ทั้งติดตั้งครั้งแรกและอัปเดต
 - `latest.json` มีเวอร์ชัน URL และ signature ของทั้งสามแพลตฟอร์ม; `SHA256SUMS.txt` สำหรับตรวจไฟล์เอง
 
-ซอร์สไม่จำเป็นต้อง public เพื่อให้ผู้ใช้ดาวน์โหลดได้ แนะนำทำซอร์สเป็น private หากไม่ต้องการเปิดเผยโค้ด และคง repo แจกไฟล์เป็น public ผู้ใช้จึงไม่ต้องใช้ token แอปไม่มี GitHub token ฝังอยู่ การเปลี่ยน repo เป็น private ภายหลังไม่ลบสำเนาที่ผู้อื่นดาวน์โหลดไปแล้ว
+ซอร์สเป็น private และ repo แจกไฟล์เป็น public ผู้ใช้จึงดาวน์โหลดได้โดยไม่ต้องใช้ token แอปไม่มี GitHub token ฝังอยู่ การเปลี่ยน repo เป็น private ภายหลังไม่ลบสำเนาที่ผู้อื่นดาวน์โหลดไปแล้ว
 
 ## ประสบการณ์ผู้ใช้
 
@@ -55,7 +65,7 @@ https://github.com/sparkclan123/buggy-table/settings/environments
 
 Azure principal ต้องมีบทบาท Artifact Signing Certificate Profile Signer บน profile ที่เลือก ใช้บริการตาม region/account ของคุณ Workflow ใช้ `artifact-signing-cli` เวอร์ชัน 0.11.0 และ Windows runner ที่มี .NET/Azure CLI/Windows SDK
 
-GitHub ไม่รองรับ secret ช่องว่างเป็น placeholder จึงเตรียม environment, ชื่อที่ workflow อ่าน และเอกสารให้ แทนการสร้างค่าปลอม Workflow จะหยุดหากค่าจำเป็นขาดหาย ยังไม่ได้อัปโหลด secret ของคุณให้
+GitHub ไม่รองรับ secret ช่องว่างเป็น placeholder จึงเตรียม environment, ชื่อที่ workflow อ่าน และเอกสารให้ แทนการสร้างค่าปลอม Workflow จะหยุดหากค่าจำเป็นขาดหาย ตั้ง updater private key แล้ว แต่ยังต้องเพิ่ม Apple/Windows signing credentials และ upload token สำหรับ signed workflow
 
 สำรอง updater private key แบบเข้ารหัสใน password manager/offline backup พร้อมเก็บสิทธิ์เข้าถึงจำกัด Public key ที่แอปเชื่อถืออยู่ใน `src-tauri/tauri.release.conf.json` ห้ามสร้างทับหรือเปลี่ยน key เองหลังแจกแอป ไม่เช่นนั้นผู้ใช้เดิมอัปเดตไม่ได้ สคริปต์ `pnpm release:key` ป้องกันการแทน key ที่ไม่ตรงเดิม
 
@@ -83,7 +93,7 @@ GitHub ไม่รองรับ secret ช่องว่างเป็น p
    git push origin v0.1.1
    ```
 
-   ใช้ `v0.1.0` สำหรับรุ่นแรกได้ Workflow ตรวจ tag เทียบเวอร์ชันก่อน build หรือเลือก Actions → Build signed release → Run workflow แล้วใส่ existing tag
+   ใช้เลขใหม่ที่ยังไม่เคยเผยแพร่ (0.1.0 สงวนให้รุ่นทดสอบแล้ว) Workflow ตรวจ tag เทียบเวอร์ชันก่อน build หรือเลือก Actions → Build signed release → Run workflow แล้วใส่ existing tag
 
 4. Workflow สร้าง/เซ็น/notarize ทั้งสามแพลตฟอร์ม ตรวจ OS signatures รวม manifest และสร้าง **draft release** ใน repo แจกไฟล์ จะไม่แก้ทับ release ที่มีอยู่ ไม่เผยแพร่ partial build ถ้ามีแพลตฟอร์มใดไม่ผ่าน
 5. ดาวน์โหลด artifact จาก Actions ทดสอบติดตั้งและ query ด้วยบัญชีทดสอบ ตรวจชื่อ publisher/Gatekeeper และลองอัปเดตจากรุ่นก่อน เมื่อพร้อมเปิด draft ที่ https://github.com/sparkclan123/buggy-table-releases/releases แล้วกด **Publish release** ให้เป็น latest stable release
@@ -95,7 +105,7 @@ GitHub ไม่รองรับ secret ช่องว่างเป็น p
 
 - Mac เครื่องนี้: `pnpm desktop:build --bundles app,dmg`
 - Windows: `pnpm desktop:build --bundles nsis` บน Windows ที่ติดตั้ง toolchain ตาม DEVELOPMENT.md
-- หรือ Actions → **Build test installers** → Run workflow ได้ artifacts ทั้งสามระบบในหน้า run อายุ 7 วัน ไม่มีระบบอัปเดต/OS certificate ใน build นี้ จึงเป็นไฟล์ทดสอบเท่านั้น ไม่ใช่ไฟล์สำหรับ public release
+- หรือ Actions → **Build test installers** → Run workflow ได้ artifacts ทั้งสามระบบในหน้า run อายุ 7 วัน ไม่มีระบบอัปเดต/OS certificate ใน build นี้ แจกได้ในฐานะ Pre-release ที่ระบุข้อจำกัดชัดเจน ไม่ใช่ signed production release
 - ผลลัพธ์ local อยู่ `src-tauri/target/release/bundle/` ส่วน `.app` อยู่ `macos/`, `.dmg` อยู่ `dmg/`, Windows `.exe` อยู่ `nsis/`
 
 ## สิ่งที่ต้องตรวจจริงก่อนแจก
