@@ -87,3 +87,5 @@ The result grid has neutral text and fixed 28 px rows. Column widths (72-800 px)
 ## Additional database adapters
 
 See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for MySQL/Redis boundaries, dependency findings and residual limits. MySQL uses mysql_async with native TLS and prepared filter values; numeric/decimal values remain strings. Redis uses redis-rs with an 8 MiB wire-budget wrapper, explicit driver-task ownership and no automatic redirect/reconnect. MySQL normalizes its session SQL mode and requires direct read grants. These engines reject manual writes regardless of IPC flags.
+
+UI tests start a production preview on port 1420 (close any dev server on that port first). This tests the bundled lazy SQL editor without Vite dev dependency reloads. Failure traces are uploaded by CI.

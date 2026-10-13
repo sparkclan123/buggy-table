@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { EditorState } from '@codemirror/state';
+  import { Compartment, EditorState } from '@codemirror/state';
   import { EditorView, keymap } from '@codemirror/view';
   import { basicSetup } from 'codemirror';
   import { sql, PostgreSQL, MySQL } from '@codemirror/lang-sql';
@@ -21,12 +21,16 @@
   let element: HTMLDivElement;
   let view: EditorView | undefined;
   onMount(() => {
+    const appearance = new Compartment();
+    const editorTheme = () =>
+      EditorView.theme({}, { dark: document.documentElement.dataset.theme === 'dark' });
     view = new EditorView({
       parent: element,
       state: EditorState.create({
         doc: value,
         extensions: [
           basicSetup,
+          appearance.of(editorTheme()),
           sql({ dialect: engine === 'mysql' ? MySQL : PostgreSQL, schema }),
           keymap.of([
             {
@@ -69,7 +73,18 @@
         ],
       }),
     });
-    return () => view?.destroy();
+    // Keep completion/search panels in sync when the user changes appearance.
+    const observer = new MutationObserver(() => {
+      view?.dispatch({ effects: appearance.reconfigure(editorTheme()) });
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+    return () => {
+      observer.disconnect();
+      view?.destroy();
+    };
   });
   $effect(() => {
     if (view && view.state.doc.toString() !== value)

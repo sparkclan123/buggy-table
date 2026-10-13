@@ -61,9 +61,16 @@ test('system theme follows OS; explicit choice survives reload and covers editor
   await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: 'SQL editor', exact: true }).click();
   await expect(page.locator('.cm-editor')).toHaveCSS('background-color', 'rgb(28, 30, 33)');
+  await page.locator('.cm-content').click();
+  const modifier = await page.evaluate(() =>
+    navigator.platform.includes('Mac') ? 'Meta' : 'Control',
+  );
+  await page.keyboard.press(`${modifier}+f`);
+  await expect(page.locator('.cm-panels')).toHaveCSS('background-color', 'rgb(51, 51, 56)');
   await page.screenshot({ path: testInfo.outputPath('dark-theme.png') });
   await page.getByLabel('Appearance').selectOption('light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('.cm-panels')).toHaveCSS('background-color', 'rgb(245, 245, 245)');
   await page.reload();
   await expect(page.getByLabel('Appearance')).toHaveValue('light');
   await page.getByLabel('Appearance').selectOption('system');

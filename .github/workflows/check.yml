@@ -46,5 +46,11 @@ jobs:
       - run: pnpm test:integration
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:ui
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-failure-traces
+          path: test-results/
+          retention-days: 7
       - if: always()
         run: docker compose down
