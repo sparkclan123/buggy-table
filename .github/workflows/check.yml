@@ -29,7 +29,7 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:rust
       - run: pnpm lint:rust
-      - run: pnpm tauri build --no-bundle
+      - run: pnpm tauri build --debug --no-bundle
 
   integration:
     runs-on: ubuntu-latest
