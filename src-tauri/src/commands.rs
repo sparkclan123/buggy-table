@@ -1,0 +1,65 @@
+use crate::{models::*, service::Workbench};
+use tauri::State;
+
+#[tauri::command]
+pub async fn connect(
+    state: State<'_, Workbench>,
+    request: ConnectRequest,
+) -> AppResult<ConnectionInfo> {
+    state.connect(request).await
+}
+
+#[tauri::command]
+pub async fn disconnect(state: State<'_, Workbench>, connection_id: String) -> AppResult<()> {
+    state.disconnect(&connection_id).await
+}
+
+#[tauri::command]
+pub async fn run_query(
+    state: State<'_, Workbench>,
+    request: QueryRequest,
+) -> AppResult<QueryResult> {
+    state.query(request).await
+}
+
+#[tauri::command]
+pub fn cancel_query(
+    state: State<'_, Workbench>,
+    connection_id: String,
+    request_id: String,
+) -> AppResult<()> {
+    state.cancel(&connection_id, &request_id)
+}
+
+#[tauri::command]
+pub async fn browse_table(
+    state: State<'_, Workbench>,
+    request: BrowseRequest,
+) -> AppResult<QueryResult> {
+    state.browse(request).await
+}
+
+#[tauri::command]
+pub async fn inspect_table(
+    state: State<'_, Workbench>,
+    connection_id: String,
+    table: String,
+) -> AppResult<Vec<IndexInfo>> {
+    state.indexes(&connection_id, &table).await
+}
+
+#[tauri::command]
+pub async fn get_overview(
+    state: State<'_, Workbench>,
+    connection_id: String,
+) -> AppResult<Overview> {
+    state.overview(&connection_id).await
+}
+
+#[tauri::command]
+pub async fn save_table_changes(
+    state: State<'_, Workbench>,
+    request: SaveRequest,
+) -> AppResult<SaveResult> {
+    state.save(request).await
+}

@@ -1,0 +1,8 @@
+node_modules
+dist
+src-tauri
+pnpm-lock.yaml
+DATABASE_TOOL_PLAN.md
+note.md
+test-results
+playwright-report

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-table-changes"
+description = "Enables the save_table_changes command without any pre-configured scope."
+commands.allow = ["save_table_changes"]
+
+[[permission]]
+identifier = "deny-save-table-changes"
+description = "Denies the save_table_changes command without any pre-configured scope."
+commands.deny = ["save_table_changes"]

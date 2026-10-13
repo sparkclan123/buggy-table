@@ -1,0 +1,44 @@
+[package]
+name = "table-por"
+version = "0.1.0"
+description = "A local, read-only database workspace"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "table_por"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "table-por"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [], optional = true }
+
+[dependencies]
+tauri = { version = "2.12", features = [], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-postgres = "0.7"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+futures-util = "0.3"
+sqlparser = "0.61"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"
