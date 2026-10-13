@@ -1,0 +1,3 @@
+user default off
+user fixture_admin on >local-redis-admin ~* &* +@all
+user tablepor_reader on >local-redis-reader ~* -@all +ping +select +info +dbsize +scan +getrange +exists +type +ttl +pttl +strlen +hlen +llen +scard +zcard +lrange +zrange +hscan +sscan +zscan

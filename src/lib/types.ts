@@ -1,5 +1,7 @@
+export type Engine = 'postgres' | 'mysql' | 'redis';
 export type TlsMode = 'verifyFull' | 'localOnly';
 export interface ConnectRequest {
+  engine: Engine;
   name: string;
   host: string;
   port: number;
@@ -24,6 +26,7 @@ export interface TableInfo {
   estimatedRows: number | null;
 }
 export interface ConnectionInfo {
+  engine: Engine;
   id: string;
   name: string;
   host: string;
@@ -98,4 +101,9 @@ export interface SaveRequest {
 }
 export interface SaveResult {
   updatedRows: number;
+}
+
+export interface RedisResult {
+  value: unknown;
+  elapsedMs: number;
 }

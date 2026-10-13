@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-redis-command"
+description = "Enables the redis_command command without any pre-configured scope."
+commands.allow = ["redis_command"]
+
+[[permission]]
+identifier = "deny-redis-command"
+description = "Denies the redis_command command without any pre-configured scope."
+commands.deny = ["redis_command"]

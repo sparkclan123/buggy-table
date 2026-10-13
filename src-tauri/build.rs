@@ -10,6 +10,9 @@ fn main() {
             "inspect_table",
             "get_overview",
             "save_table_changes",
+            "redis_command",
+            "check_update",
+            "install_update",
         ]),
     ))
     .expect("failed to build Tauri application metadata");

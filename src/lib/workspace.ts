@@ -3,7 +3,7 @@ import { quoteIdentifier } from './api';
 
 export type TableView = 'data' | 'structure' | 'indexes' | 'sql';
 export type CellEdits = Record<number, Record<string, string | null>>;
-export function createWorkspace(table?: TableInfo) {
+export function createWorkspace(table?: TableInfo, engine = 'postgres') {
   return {
     id: table ? `${table.schema}.${table.name}` : 'empty',
     selectedName: table?.name ?? '',
@@ -21,7 +21,7 @@ export function createWorkspace(table?: TableInfo) {
     queryResult: null as QueryResult | null,
     indexes: [] as IndexInfo[],
     sql: table
-      ? `SELECT *\nFROM ${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}\nLIMIT 200;`
+      ? `SELECT *\nFROM ${quoteIdentifier(table.schema, engine)}.${quoteIdentifier(table.name, engine)}\nLIMIT 200;`
       : 'SELECT 1;',
     plan: null as string | null,
     edits: {} as CellEdits,

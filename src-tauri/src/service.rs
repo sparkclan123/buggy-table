@@ -2,14 +2,33 @@
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use tokio::sync::{RwLock, watch};
 use uuid::Uuid;
 
-use crate::{models::*, postgres::Profile};
+use crate::{models::*, mysql, postgres::Profile, redis_store, remote_profile::RemoteProfile};
+
+enum Session {
+    Postgres(Profile),
+    Mysql(RemoteProfile),
+    Redis(RemoteProfile),
+}
+impl Session {
+    fn postgres(&self) -> AppResult<&Profile> {
+        match self {
+            Self::Postgres(p) => Ok(p),
+            _ => Err(AppError::policy(
+                "This operation is unavailable for this engine.",
+            )),
+        }
+    }
+}
 
 struct Job {
     connection_id: String,
@@ -20,8 +39,9 @@ type Jobs = Arc<Mutex<HashMap<String, Job>>>;
 
 #[derive(Default)]
 pub struct Workbench {
-    sessions: RwLock<HashMap<String, Arc<Profile>>>,
+    sessions: RwLock<HashMap<String, Arc<Session>>>,
     jobs: Jobs,
+    updating: AtomicBool,
 }
 
 struct JobGuard {
@@ -42,19 +62,48 @@ enum Operation {
     Browse(BrowseRequest),
 }
 
+pub struct UpdateGuard<'a>(&'a Workbench);
+impl Drop for UpdateGuard<'_> {
+    fn drop(&mut self) {
+        self.0.updating.store(false, Ordering::SeqCst);
+    }
+}
+
 impl Workbench {
+    /// Share the job lock so a query cannot start between checking and locking updates.
+    pub fn begin_update(&self) -> AppResult<UpdateGuard<'_>> {
+        let jobs = self.jobs.lock().map_err(|_| internal_error())?;
+        if !jobs.is_empty() || self.updating.swap(true, Ordering::SeqCst) {
+            return Err(AppError::new(
+                "BUSY",
+                "Finish database operations before installing an update.",
+            ));
+        }
+        Ok(UpdateGuard(self))
+    }
+
     pub async fn connect(&self, request: ConnectRequest) -> AppResult<ConnectionInfo> {
-        let profile = Arc::new(Profile::new(request)?);
-        let result = tokio::time::timeout(Duration::from_secs(20), async {
-            let db = profile.open().await?;
-            let version = db.preflight().await?;
-            let tables = db.tables(&profile.schema).await?;
-            Ok::<_, AppError>((version, tables))
+        let id = Uuid::new_v4().to_string();
+        let (_connection_job, _) = self.register_job(&id, &id)?;
+        let profile = Arc::new(match request.engine {
+            Engine::Postgres => Session::Postgres(Profile::new(request)?),
+            Engine::Mysql => Session::Mysql(RemoteProfile::new(request)?),
+            Engine::Redis => Session::Redis(RemoteProfile::new(request)?),
+        });
+        let info = tokio::time::timeout(Duration::from_secs(20), async {
+            match profile.as_ref() {
+                Session::Postgres(p) => {
+                    let db = p.open().await?;
+                    let version = db.preflight().await?;
+                    let tables = db.tables(&p.schema).await?;
+                    Ok(p.info(id.clone(), version, tables))
+                }
+                Session::Mysql(p) => mysql::connect(p, id.clone()).await,
+                Session::Redis(p) => redis_store::connect(p, id.clone()).await,
+            }
         })
         .await
         .map_err(|_| AppError::new("TIMEOUT", "Connection preflight timed out."))??;
-        let id = Uuid::new_v4().to_string();
-        let info = profile.info(id.clone(), result.0, result.1);
         let mut sessions = self.sessions.write().await;
         if sessions.len() >= 8 {
             return Err(AppError::new(
@@ -79,7 +128,7 @@ impl Workbench {
         &self,
         id: &str,
         request_id: &str,
-    ) -> AppResult<(Arc<Profile>, JobGuard, watch::Receiver<bool>)> {
+    ) -> AppResult<(Arc<Session>, JobGuard, watch::Receiver<bool>)> {
         // Keep the session read lock until the job is registered. Disconnect
         // cannot miss a job between cloning its profile and registering it.
         let sessions = self.sessions.read().await;
@@ -102,6 +151,12 @@ impl Workbench {
             ));
         }
         let mut jobs = self.jobs.lock().map_err(|_| internal_error())?;
+        if self.updating.load(Ordering::SeqCst) {
+            return Err(AppError::new(
+                "UPDATING",
+                "Wait for the application update to finish.",
+            ));
+        }
         if jobs.contains_key(request_id) || jobs.values().any(|j| j.connection_id == connection_id)
         {
             return Err(AppError::new(
@@ -149,6 +204,7 @@ impl Workbench {
         let (profile, _guard, mut cancelled) = self
             .start_operation(&request.connection_id, &request.request_id)
             .await?;
+        let profile = profile.postgres()?;
         if !profile.manual_edits {
             return Err(AppError::policy(
                 "Manual editing is disabled for this connection.",
@@ -174,6 +230,19 @@ impl Workbench {
         };
         let (profile, _guard, mut cancelled) =
             self.start_operation(connection_id, request_id).await?;
+        if let Session::Mysql(p) = profile.as_ref() {
+            return bounded_metadata(
+                async {
+                    match &operation {
+                        Operation::Sql(r) => mysql::query(p, r).await,
+                        Operation::Browse(r) => mysql::browse(p, r).await,
+                    }
+                },
+                cancelled,
+            )
+            .await;
+        }
+        let profile = profile.postgres()?;
         let db = tokio::select! {
             result = profile.open() => result?,
             _ = async { let _ = cancelled.wait_for(|value| *value).await; } => return Err(AppError::new("CANCELLED", "Connection attempt cancelled.")),
@@ -215,6 +284,10 @@ impl Workbench {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
+        if let Session::Mysql(p) = profile.as_ref() {
+            return bounded_metadata(mysql::indexes(p, table_name), cancelled).await;
+        }
+        let profile = profile.postgres()?;
         bounded_metadata(
             async {
                 let db = profile.open().await?;
@@ -230,10 +303,26 @@ impl Workbench {
         .await
     }
 
+    pub async fn redis_command(&self, request: RedisRequest) -> AppResult<RedisResult> {
+        let (profile, _guard, cancelled) = self
+            .start_operation(&request.connection_id, &request.request_id)
+            .await?;
+        let Session::Redis(p) = profile.as_ref() else {
+            return Err(AppError::policy(
+                "This command requires a Redis connection.",
+            ));
+        };
+        bounded_metadata(redis_store::command(p, &request.args), cancelled).await
+    }
+
     pub async fn overview(&self, connection_id: &str) -> AppResult<Overview> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
+        if let Session::Mysql(p) = profile.as_ref() {
+            return bounded_metadata(mysql::overview(p), cancelled).await;
+        }
+        let profile = profile.postgres()?;
         bounded_metadata(
             async {
                 let db = profile.open().await?;
@@ -269,4 +358,22 @@ fn save_uncertain() -> AppError {
         "SAVE_UNCERTAIN",
         "The save response was interrupted. Reload this table to check the database before making further edits.",
     )
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    #[test]
+    fn update_and_database_jobs_are_mutually_exclusive() {
+        let workbench = Workbench::default();
+        let id = Uuid::new_v4().to_string();
+        let (job, _) = workbench.register_job("session", &id).unwrap();
+        assert!(workbench.begin_update().is_err());
+        drop(job);
+        let update = workbench.begin_update().unwrap();
+        assert!(workbench.begin_update().is_err());
+        assert!(workbench.register_job("session", &id).is_err());
+        drop(update);
+        assert!(workbench.register_job("session", &id).is_ok());
+    }
 }

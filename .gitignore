@@ -11,3 +11,11 @@ test-results/
 playwright-report/
 *.log
 
+
+# Signing material and generated distribution output
+*.key
+*.p12
+*.pfx
+artifacts/
+release-assets/
+src-tauri/tauri.signing.conf.json

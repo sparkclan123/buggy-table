@@ -18,7 +18,19 @@ The tests are specific to this preview, not certification of every PostgreSQL fe
 
 Performance budgets in `DATABASE_TOOL_PLAN.md` remain targets. Bundle size alone does not establish startup latency, idle memory or query overhead. Full network/OS egress verification, fuzzing, long-running soak tests, signed distribution and a Windows native run remain future release work.
 
-## Recorded results
+## MySQL / Redis update — 2026-10-14
+
+- 61 tests passed: 6 Rust policy/resource tests, 18 PostgreSQL integration tests, 8 multi-engine transport/security/integration tests, 3 frontend unit tests and 26 Chromium/WebKit UI tests.
+- MySQL fixture: version 8.4, direct SELECT-only role, browse/SQL/EXPLAIN, structure/indexes/overview, exact decimals, bound filters, sort, empty-result columns, denied functions/mutations/indirection, server-enforced write denial and privilege-drift rejection.
+- Redis fixture: Redis 8, SCAN, strings/hash, TTL, binary-as-hex, bounded GET, nonexistent keys, denied writes even under an admin fixture account, rejected cross-engine APIs and an oversized hash response interrupted at the wire budget. PING still works after that rejection.
+- Both new adapters reject remote plaintext and manual-write flags. Verified TLS rejects the local untrusted/non-TLS fixtures without downgrade. A successful connection to a public-trust TLS endpoint was not tested.
+- Browser tests include engine selection/default ports, clearing passwords, readonly mode, Redis key inspection/TTL, text-safe rendering, command rejection, refresh shortcuts and INFO navigation. Redis browser tests use a labeled IPC stub; real server coverage is in Rust and the native smoke test.
+- Native macOS ARM64 smoke test through actual Tauri IPC: selected MySQL, connected to the isolated reader fixture, opened items and executed the generated backtick-quoted SELECT with exact decimal output. Switched to Redis, scanned 6 fixture keys, inspected fixture:hello with its type/TTL, ran PING → PONG, and opened INFO server from Database overview. No real credentials or production databases were used. The final text-only INFO display adjustment passed both browser engines.
+- Release macOS `.app` built successfully (approximately 12.05 MiB). New adapters added no frontend runtime packages. CSS is approximately 14.58 kB minified; these sizes do not measure RAM. Windows native packaging/run remains unverified on this Mac.
+- Svelte/TypeScript, formatting and Clippy checks pass. Runtime adapters add mysql_async and redis-rs; no new frontend runtime dependency.
+- Dependency findings: `pnpm audit` reports zero advisories. `time` was updated to fix its advisory. Two quick-xml advisories remain through plist/Tauri; full details and reachability assessment are in [SECURITY_REVIEW.md](SECURITY_REVIEW.md). No audit suppression was added.
+
+## Previous PostgreSQL UI build results
 
 - Rust: 3 policy tests and 18 integration/connection/save tests passed (including the opt-in fixture tests).
 - Frontend unit tests: 3 passed.

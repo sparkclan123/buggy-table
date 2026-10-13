@@ -43,6 +43,7 @@ export const sampleTables: TableInfo[] = [
 ];
 
 export const sampleConnection: ConnectionInfo = {
+  engine: 'postgres',
   id: 'sample',
   name: 'Sample workspace',
   host: 'offline',

@@ -28,9 +28,13 @@
     Check,
     Unplug,
   } from '@lucide/svelte';
+  import ThemeControl from './components/ThemeControl.svelte';
+  import UpdateNotice from './components/UpdateNotice.svelte';
+  let updating = $state(false);
   import { onMount } from 'svelte';
   import { guardWindowClose } from './lib/window-lifecycle';
   import { createWorkspace, changeCell, changedRows, type TableView as Tab } from './lib/workspace';
+  import RedisWorkspace from './components/RedisWorkspace.svelte';
   import ConfirmClose from './components/ConfirmClose.svelte';
   import ConnectionDialog from './components/ConnectionDialog.svelte';
   import ResultGrid from './components/ResultGrid.svelte';
@@ -59,6 +63,13 @@
   let error = $state('');
   let activeRequest = $state<string | null>(null);
   let epoch = 0;
+  const engineName = $derived(
+    connection.engine === 'mysql'
+      ? 'MySQL'
+      : connection.engine === 'redis'
+        ? 'Redis'
+        : 'PostgreSQL',
+  );
   const isSample = $derived(connection.id === 'sample');
   const selected = $derived(connection.tables.find((t) => t.name === workspace.selectedName));
   const visibleTables = $derived(
@@ -132,7 +143,7 @@
       return;
     }
     openTables = openTables.filter((t) => t.id !== 'empty');
-    openTables.push(createWorkspace(table));
+    openTables.push(createWorkspace(table, connection.engine));
     activeId = id;
     await loadData(table, 0, []);
   }
@@ -191,7 +202,7 @@
         });
       }
       workspace.edits = {};
-      workspace.notice = `${rows.length} row${rows.length === 1 ? '' : 's'} saved${isSample ? ' in the local sample only' : ' to PostgreSQL'}.`;
+      workspace.notice = `${rows.length} row${rows.length === 1 ? '' : 's'} saved${isSample ? ' in the local sample only' : ` to ${engineName}`}.`;
     } catch (e) {
       error = errorMessage(e);
       if (typeof e === 'object' && e && 'code' in e && e.code === 'SAVE_UNCERTAIN')
@@ -225,7 +236,7 @@
 
   onMount(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (anyDirty || saving) {
+      if (anyDirty || saving || updating) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -233,15 +244,17 @@
     let disposed = false;
     let unlisten = () => {};
     void guardWindowClose(
-      () => anyDirty || saving,
+      () => anyDirty || saving || updating,
       () => {
         page = 'explorer';
         if (!busy)
           activeId =
             openTables.find((t) => Object.keys(t.edits).length || t.uncertain)?.id ?? activeId;
-        error = saving
-          ? 'Wait for the save to finish before closing.'
-          : 'Save or discard pending edits in your table tabs before closing the app.';
+        error = updating
+          ? 'Wait for the update to finish before closing.'
+          : saving
+            ? 'Wait for the save to finish before closing.'
+            : 'Save or discard pending edits in your table tabs before closing the app.';
       },
     )
       .then((cleanup) => {
@@ -385,7 +398,7 @@
     if (busy) return;
     page = next;
     error = '';
-    if (next === 'overview') await refreshOverview();
+    if (next === 'overview' && connection.engine !== 'redis') await refreshOverview();
   }
 
   async function applyFilters(event: SubmitEvent) {
@@ -425,7 +438,7 @@
   }
 
   function handleShortcut(event: KeyboardEvent) {
-    if (event.isComposing || document.querySelector('dialog[open]')) return;
+    if (updating || event.isComposing || document.querySelector('dialog[open]')) return;
     const modifier = event.metaKey || event.ctrlKey;
     if (modifier && event.key.toLowerCase() === 's') {
       event.preventDefault();
@@ -447,7 +460,7 @@
   ><title>Table Por · {isSample ? 'Sample workspace' : connection.name}</title></svelte:head
 >
 
-<div class="app-shell">
+<div class="app-shell" inert={updating}>
   <aside class="sidebar">
     <button class="brand" onclick={() => navigate('explorer')} disabled={busy}
       ><span class="brand-mark"><Table2 size={22} /></span><span
@@ -460,9 +473,11 @@
         class:active={page === 'explorer'}
         onclick={() => navigate('explorer')}
         disabled={busy}
-        ><Database size={17} />Database explorer<span class="nav-count"
-          >{connection.tables.length}</span
-        ></button
+        ><Database size={17} />{connection.engine === 'redis'
+          ? 'Key explorer'
+          : 'Database explorer'}{#if connection.engine !== 'redis'}<span class="nav-count"
+            >{connection.tables.length}</span
+          >{/if}</button
       >
       <button
         class:active={page === 'overview'}
@@ -491,38 +506,46 @@
           >{connection.name}</strong
         ><span class={`connection-dot ${isSample ? 'sample-dot' : ''}`}></span>
       </div>
-      <div class="schema-root">
-        <ChevronDown size={13} /><Columns3 size={14} />{connection.schema}<span
-          >{connection.tables.length}</span
-        >
-      </div>
-      <div class="table-search">
-        <Search size={13} /><input
-          aria-label="Search tables"
-          bind:value={search}
-          placeholder="Find a table…"
-          spellcheck="false"
-        />
-      </div>
-      <div class="table-list">
-        {#each visibleTables as table}<button
-            class:selected={page === 'explorer' && workspace.selectedName === table.name}
-            onclick={() => selectTable(table)}
-            disabled={busy}
-            ><Table2 size={14} />{table.name}{#if workspace.selectedName === table.name}<span
-                class="selected-indicator"
-              ></span>{/if}</button
-          >{/each}
-        {#if !visibleTables.length}<p class="sidebar-empty">
-            {search ? 'No matching tables' : 'No approved base tables'}
-          </p>{/if}
-      </div>
+      {#if connection.engine === 'redis'}
+        <div class="schema-root">Database {connection.database} · Standalone</div>
+        <p class="muted small">
+          Browse keys in Key explorer. Server information is available in Database overview.
+        </p>
+      {:else}
+        <div class="schema-root">
+          <ChevronDown size={13} /><Columns3 size={14} />{connection.schema}<span
+            >{connection.tables.length}</span
+          >
+        </div>
+        <div class="table-search">
+          <Search size={13} /><input
+            aria-label="Search tables"
+            bind:value={search}
+            placeholder="Find a table…"
+            spellcheck="false"
+          />
+        </div>
+        <div class="table-list">
+          {#each visibleTables as table}<button
+              class:selected={page === 'explorer' && workspace.selectedName === table.name}
+              onclick={() => selectTable(table)}
+              disabled={busy}
+              ><Table2 size={14} />{table.name}{#if workspace.selectedName === table.name}<span
+                  class="selected-indicator"
+                ></span>{/if}</button
+            >{/each}
+          {#if !visibleTables.length}<p class="sidebar-empty">
+              {search ? 'No matching tables' : 'No approved base tables'}
+            </p>{/if}
+        </div>
+      {/if}
     </div>
     <div class="sidebar-bottom">
+      <ThemeControl />
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
-      <div class="sidebar-version"><span>Table Por</span><span>v0.1 · Preview</span></div>
+      <div class="sidebar-version"><span>Table Por</span><span>v{__APP_VERSION__}</span></div>
     </div>
   </aside>
 
@@ -564,7 +587,13 @@
           >
         </div>{/if}
 
-      {#if page === 'explorer'}
+      {#if connection.engine === 'redis' && (page === 'explorer' || page === 'overview')}
+        {#key `${connection.id}-${page}`}<RedisWorkspace
+            {connection}
+            showOverview={page === 'overview'}
+            bind:busy
+          />{/key}
+      {:else if page === 'explorer'}
         <div class="table-tabbar" role="tablist" aria-label="Open tables">
           {#each openTables.filter((t) => t.id !== 'empty') as item (item.id)}
             <div class:active={item.id === activeId} class="table-tab">
@@ -813,6 +842,7 @@
               >
             </div>
             {#await import('./components/SqlEditor.svelte') then editor}<editor.default
+                engine={connection.engine}
                 value={workspace.sql}
                 onchange={(value) => (workspace.sql = value)}
                 onrun={() => runQuery()}
@@ -868,11 +898,11 @@
             <div class="large-icon"><Activity size={30} /></div>
             <h2>Real metrics need a real connection.</h2>
             <p>
-              Connect PostgreSQL to inspect database size, sessions, transaction counters and cache
-              statistics. We don’t simulate database health.
+              Connect a database to inspect the metrics available for that engine and account. We
+              don’t simulate database health.
             </p>
             <button class="primary-button" onclick={openConnection}
-              ><PlugZap size={16} />Connect PostgreSQL</button
+              ><PlugZap size={16} />Connect database</button
             >
           </div>{:else if overview}<div class="metric-grid">
             <article>
@@ -893,8 +923,16 @@
               ><small>Cumulative · not a health score</small>
             </article>
             <article>
-              <span>Transactions committed</span><strong>{overview.transactionsCommitted}</strong
-              ><small>{overview.transactionsRolledBack} rolled back</small>
+              <span
+                >{connection.engine === 'mysql'
+                  ? 'COMMIT statements'
+                  : 'Transactions committed'}</span
+              ><strong>{overview.transactionsCommitted}</strong><small
+                >{overview.transactionsRolledBack}
+                {connection.engine === 'mysql'
+                  ? 'ROLLBACK statements · server-wide; excludes autocommit'
+                  : 'rolled back'}</small
+              >
             </article>
           </div>
           <div class="detail-card">
@@ -907,7 +945,7 @@
               <dt>Statistics reset</dt>
               <dd>{overview.statsReset ?? 'Not reported'}</dd>
               <dt>Server</dt>
-              <dd>PostgreSQL {overview.serverVersion}</dd>
+              <dd>{engineName} {overview.serverVersion}</dd>
               <dt>Collection</dt>
               <dd>Manual refresh. Current activity can miss short queries.</dd>
             </dl>
@@ -933,8 +971,9 @@
             <LockKeyhole size={22} />
             <h3>Explicit saves, protected queries</h3>
             <p>
-              SQL is checked in Rust and runs in read-only transactions. Manual cell saves use a
-              separate, permission-checked UPDATE operation with conflict detection.
+              SQL is checked in Rust and runs in read-only transactions. Redis commands use a read
+              allowlist. PostgreSQL manual cell saves use a separate, permission-checked UPDATE
+              operation with conflict detection.
             </p>
             <span class="badge">No delete or truncate tools</span>
           </article>
@@ -942,26 +981,30 @@
             <Database size={22} />
             <h3>Direct database access</h3>
             <p>
-              The app connects only to the database endpoint you enter. No analytics, cloud AI,
-              remote assets or automatic update checks are included.
+              Database connections go directly to the endpoint you enter. Signed releases can check
+              GitHub for updates; database contents and credentials are never included. Turn off
+              automatic checks in the update menu to stop background update requests. There are no
+              analytics, cloud AI or remote assets.
             </p>
-            <span class="badge">No cloud service</span>
+            <span class="badge">No database uploads</span>
           </article>
           <article class="detail-card">
             <ShieldCheck size={22} />
             <h3>Session-only storage</h3>
             <p>
               Credentials, query text and results are held in memory. This preview does not save
-              connections, history or result caches to disk.
+              connections, history or result caches to disk. Only appearance and update preferences
+              are stored locally.
             </p>
-            <span class="badge">Persistence off</span>
+            <span class="badge">Database persistence off</span>
           </article>
           <article class="detail-card">
             <CircleHelp size={22} />
             <h3>Preview boundaries</h3>
             <p>
-              Only PostgreSQL base tables with supported built-in types are enabled. Views, custom
-              routines, RLS tables and advanced SQL are intentionally excluded.
+              PostgreSQL and MySQL expose supported base tables; Redis exposes approved read
+              commands. Views, custom routines, RLS tables and advanced SQL are intentionally
+              excluded.
             </p>
             <span class="neutral-badge">Security hardening in progress</span>
           </article>
@@ -1018,7 +1061,7 @@
       <span
         ><span class="tiny-dot"></span>{isSample
           ? 'Sample mode · offline'
-          : 'PostgreSQL · direct session'}</span
+          : `${engineName} · direct session`}</span
       ><span
         >{desktopAvailable ? 'Desktop' : 'Browser preview'}<span class="footer-separator">·</span
         >All results stay in this app</span
@@ -1030,6 +1073,8 @@
     onconnected={connected}
     onclose={() => (showConnection = false)}
   />{/if}
+
+<UpdateNotice blocked={busy || anyDirty || showConnection} bind:installing={updating} />
 
 <svelte:window onkeydown={handleShortcut} />
 {#if closeTarget}<ConfirmClose

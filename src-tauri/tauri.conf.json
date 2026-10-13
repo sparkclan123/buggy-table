@@ -10,11 +10,46 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Table Por", "width": 1380, "height": 880, "minWidth": 1000, "minHeight": 680 }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Table Por",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 1000,
+        "minHeight": 680
+      }
+    ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
-  "bundle": { "active": true, "targets": ["app", "dmg", "nsis"], "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"] }
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/sparkclan123/buggy-table-releases/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "requireSignedVersion": true
+    }
+  }
 }

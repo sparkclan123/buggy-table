@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AppError,
+  RedisResult,
   SaveRequest,
   SaveResult,
   BrowseRequest,
@@ -18,12 +19,14 @@ async function call<T>(command: string, args: Record<string, unknown>): Promise<
     throw {
       code: 'DESKTOP_REQUIRED',
       message:
-        'Open the desktop app to connect to PostgreSQL. This browser preview only contains local sample data.',
+        'Open the desktop app to connect to a database. This browser preview only contains local sample data.',
     } satisfies AppError;
   return invoke<T>(command, args);
 }
 
 export const api = {
+  redis: (connectionId: string, requestId: string, args: string[]) =>
+    call<RedisResult>('redis_command', { request: { connectionId, requestId, args } }),
   save: (request: SaveRequest) => call<SaveResult>('save_table_changes', { request }),
   connect: (request: ConnectRequest) => call<ConnectionInfo>('connect', { request }),
   disconnect: (connectionId: string) => call<void>('disconnect', { connectionId }),
@@ -48,6 +51,7 @@ export function errorMessage(error: unknown): string {
   return 'The operation could not be completed. Please reconnect and try again.';
 }
 
-export function quoteIdentifier(value: string): string {
+export function quoteIdentifier(value: string, engine: string = 'postgres'): string {
+  if (engine === 'mysql') return `\`${value.replaceAll('`', '``')}\``;
   return `"${value.replaceAll('"', '""')}"`;
 }

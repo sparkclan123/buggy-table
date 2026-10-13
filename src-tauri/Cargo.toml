@@ -17,23 +17,31 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-build"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-updater"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
 tauri = { version = "2.12", features = [], optional = true }
+tauri-plugin-updater = { version = "2.13.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 tokio-postgres = "0.7"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
+tokio-native-tls = "0.3"
 futures-util = "0.3"
 sqlparser = "0.61"
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
+mysql_async = { version = "0.37.1", default-features = false, features = ["minimal-rust", "native-tls-tls"] }
+redis = { version = "1.7.1", default-features = false, features = ["tokio-native-tls-comp"] }
+
+[dev-dependencies]
+base64 = "0.23"
+minisign-verify = "0.3"
 
 [profile.release]
 strip = true

@@ -34,6 +34,8 @@ impl std::error::Error for AppError {}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectRequest {
+    #[serde(default)]
+    pub engine: Engine,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -44,6 +46,15 @@ pub struct ConnectRequest {
     pub tls: TlsMode,
     #[serde(default)]
     pub manual_edits: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Engine {
+    #[default]
+    Postgres,
+    Mysql,
+    Redis,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -76,6 +87,7 @@ pub struct TableInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
+    pub engine: Engine,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -200,4 +212,19 @@ pub struct RowChange {
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
     pub updated_rows: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RedisRequest {
+    pub connection_id: String,
+    pub request_id: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedisResult {
+    pub value: serde_json::Value,
+    pub elapsed_ms: u64,
 }
