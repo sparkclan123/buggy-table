@@ -79,9 +79,7 @@ jobs:
           pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.signing.conf.json
       - name: Verify macOS signature and notarization
         if: runner.os == 'macOS'
-        run: |
-          codesign --verify --deep --strict "src-tauri/target/${{ matrix.target }}/release/bundle/macos/buggy-table.app"
-          xcrun stapler validate "src-tauri/target/${{ matrix.target }}/release/bundle/macos/buggy-table.app"
+        run: bash scripts/verify-macos-bundle.sh "src-tauri/target/${{ matrix.target }}/release/bundle" signed
       - name: Verify Windows signatures
         if: runner.os == 'Windows'
         shell: pwsh

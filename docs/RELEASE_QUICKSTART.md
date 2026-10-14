@@ -1,16 +1,23 @@
 # รัน buggy-table และปล่อยรุ่นทดสอบ
 
-รุ่น `v0.1.4` ใช้ไฟล์จาก GitHub Actions run `38496464150` (source commit `b46a10861a4225ddf474daa98c9df99e30f9124e`) เป็น **Pre-release สำหรับทดสอบ** ไม่มี Apple Developer ID/notarization หรือ Windows Authenticode certificate และไม่มี updater ในรุ่นนี้
+รุ่น Mac `v0.1.5` แก้ลายเซ็น bundle ที่ทำให้ macOS แจ้ง “app is damaged” ใน 0.1.4 ใช้ ad-hoc signature และตรวจทั้งแอปก่อนแพ็กกับแอปใน DMG รุ่นนี้ยังเป็น **Pre-release** ไม่มี Apple Developer ID/notarization และไม่มี updater
 
-ดาวน์โหลดที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4
+ดาวน์โหลด Mac ที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.5
+Windows ใช้ 0.1.4 เดิม: https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4
 
 | เครื่อง | ไฟล์ |
 |---|---|
-| Mac ชิป M1/M2/M3/M4 และ Apple Silicon รุ่นอื่น | `buggy-table_0.1.4_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.4_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.4_x64-setup.exe` |
+| Mac Apple Silicon (M series) | `buggy-table_0.1.5_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.5_x64.dmg` |
+| Windows x64 (รุ่นเดิม) | `buggy-table_0.1.4_x64-setup.exe` |
 
-ผู้ใช้ทั่วไปดาวน์โหลดตัวติดตั้งได้เลย ไม่ต้องลง Rust, Node.js หรือรันคำสั่ง build ระบบอาจเตือนหรือบล็อกไฟล์เพราะยังไม่มีใบรับรองผู้เผยแพร่ หากเครื่ององค์กรห้ามแอปที่ยังไม่เซ็น ต้องให้ผู้ดูแลตรวจสอบก่อน รุ่นนี้ไม่ใช่ signed production release
+ผู้ใช้ทั่วไปไม่ต้องลง Rust หรือ Node.js บน Mac ให้เปิด DMG แล้วลาก buggy-table ไป Applications แทนตัวเก่า โดยไม่ลบโฟลเดอร์ข้อมูลแอป ค่าการเชื่อมต่อเดิมยังอยู่
+
+รุ่นนี้ยังไม่ผ่าน Apple notarization: หลังลองเปิดครั้งแรก ถ้า macOS แจ้งว่าไม่สามารถตรวจสอบผู้พัฒนา และคุณเชื่อถือไฟล์ที่ดาวน์โหลดจาก repo นี้ ให้ไป **System Settings → Privacy & Security → Open Anyway → Open** ตาม [ขั้นตอน Apple](https://support.apple.com/en-us/102445) เครื่องที่องค์กรดูแลอาจห้ามอนุญาตเอง ไม่ต้องปิด Gatekeeper หรือใช้คำสั่งลบ quarantine
+
+หากไฟล์ 0.1.5 ยังขึ้น “damaged” ให้หยุดและตรวจ SHA-256 กับ `SHA256SUMS.txt` พร้อมรายงานเวอร์ชัน macOS/ชนิดชิป อย่าใช้ Open Anyway กับไฟล์ที่ตรวจความสมบูรณ์ไม่ผ่าน
+
+การแจกแบบเปิดใช้งานโดยไม่ต้องอนุญาตผู้พัฒนาที่ไม่ผ่านการยืนยันต้องมี Apple Developer ID + notarization ดู [DISTRIBUTION.md](DISTRIBUTION.md)
 
 ## เปิดแอปจากซอร์สบน Mac เครื่องนี้
 
@@ -31,12 +38,13 @@ pnpm desktop
 
 ```sh
 pnpm desktop:build --bundles app,dmg
+bash scripts/verify-macos-bundle.sh src-tauri/target/release/bundle preview
 open src-tauri/target/release/bundle/dmg
 ```
 
 เครื่อง Apple Silicon จะได้ตัวติดตั้ง ARM ส่วน Intel/Windows ให้ build บน GitHub Actions ตามหัวข้อถัดไป คำสั่งนี้ไม่เปิด updater และไม่ใช้ signing Secrets
 
-## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.5
+## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.6
 
 ใช้ Terminal บน Mac เครื่องนี้ ไม่ต้องรันบน Windows (workflow อยู่ใน branch `main` ):
 
@@ -46,7 +54,7 @@ source "$HOME/.nvm/nvm.sh"
 nvm use
 git switch main
 git pull --ff-only
-pnpm release:version 0.1.5
+pnpm release:version 0.1.6
 ```
 
 แก้ `docs/RELEASE_NOTES.md` ให้ตรงรุ่น แล้วตรวจและ commit:
@@ -55,11 +63,11 @@ pnpm release:version 0.1.5
 pnpm release:check
 pnpm check
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock docs/RELEASE_NOTES.md
-git commit -m "Prepare 0.1.5 preview"
+git commit -m "Prepare 0.1.6 preview"
 git push origin main
-git tag -a preview/v0.1.5 -m "buggy-table 0.1.5 preview"
-git push origin preview/v0.1.5
-gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.5
+git tag -a preview/v0.1.6 -m "buggy-table 0.1.6 preview"
+git push origin preview/v0.1.6
+gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.6
 gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 ```
 
@@ -67,24 +75,24 @@ gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 
 ```sh
 gh run watch RUN_ID --repo sparkclan123/buggy-table --exit-status
-gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.5
+gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.6
 ```
 
 ทำต่อเฉพาะเมื่อ **ทั้งสามแพลตฟอร์มสำเร็จ** แล้วรวบรวมไฟล์และ checksum:
 
 ```sh
-mkdir -p artifacts/release-v0.1.5
-cp artifacts/preview-v0.1.5/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.5/
-cp artifacts/preview-v0.1.5/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.5/
-cp artifacts/preview-v0.1.5/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.5/
-(cd artifacts/release-v0.1.5 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
-gh release create v0.1.5 artifacts/release-v0.1.5/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.5 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
+mkdir -p artifacts/release-v0.1.6
+cp artifacts/preview-v0.1.6/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.6/
+cp artifacts/preview-v0.1.6/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.6/
+cp artifacts/preview-v0.1.6/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.6/
+(cd artifacts/release-v0.1.6 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
+gh release create v0.1.6 artifacts/release-v0.1.6/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.6 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
 ```
 
 ตรวจไฟล์ใน draft และ release notes ต้องระบุว่า **ไม่มีใบรับรอง OS และไม่มี updater** แล้วจึงเผยแพร่:
 
 ```sh
-gh release edit v0.1.5 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
+gh release edit v0.1.6 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
 ```
 
 การเผยแพร่ทำให้ทุกคนดาวน์โหลดได้ ไม่แก้ทับไฟล์รุ่นที่เผยแพร่แล้ว หากแก้แอปให้ขึ้นเลขเวอร์ชันใหม่
@@ -92,3 +100,17 @@ gh release edit v0.1.5 --repo sparkclan123/buggy-table-releases --draft=false --
 ## เมื่อพร้อมแจกแบบเซ็นและอัปเดตในแอป
 
 ใช้ [DISTRIBUTION.md](DISTRIBUTION.md) ตั้งค่า Apple และเลือกวิธีเซ็น Windows ที่รองรับประเทศของผู้สมัครก่อน จากนั้นใช้เวอร์ชันใหม่ที่ไม่ซ้ำกับ preview ที่เคยเผยแพร่ รุ่นทดสอบนี้ไม่มี updater จึงต้องดาวน์โหลด signed installer ครั้งแรกด้วยตนเอง หลังจากนั้นจึงอัปเดตผ่านแอปได้
+
+## หาก GitHub Actions ไม่เริ่มเพราะ Billing
+
+เมื่อ 14 ตุลาคม 2026 run `38498402139` ถูกบล็อกก่อนเริ่มทุก job ด้วยข้อความ recent account payments have failed or spending limit needs to be increased เจ้าของต้องตรวจ https://github.com/settings/billing จึงจะใช้ CI บน private source repo ต่อได้ อย่าเปิดซอร์สเป็น public เพื่อแก้ปัญหานี้โดยอัตโนมัติ
+
+Mac ARM สามารถ build บนเครื่องนี้ตามด้านบน ส่วน Mac Intel build ข้ามสถาปัตยกรรมได้ด้วย:
+
+```sh
+rustup target add x86_64-apple-darwin
+pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg
+bash scripts/verify-macos-bundle.sh src-tauri/target/x86_64-apple-darwin/release/bundle preview
+```
+
+Windows ต้องใช้ Windows build environment; ไม่เปลี่ยนชื่อ installer รุ่นเก่าให้เป็นเลขรุ่นใหม่

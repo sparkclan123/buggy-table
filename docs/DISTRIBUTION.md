@@ -4,13 +4,23 @@
 
 ## เริ่มโดยยังไม่มีใบรับรอง
 
-ดู [คำสั่งรันแอปและปล่อยรุ่นทดสอบ](RELEASE_QUICKSTART.md) สำหรับรุ่นฟรีที่ยังไม่เซ็นด้วย Apple/Windows รุ่นนี้เป็น Pre-release, ไม่มี `latest.json` และปิด updater เพื่อไม่ให้ถูกเสนอเป็นอัปเดตของรุ่นที่เซ็นแล้ว
+ดู [คำสั่งรันแอปและปล่อยรุ่นทดสอบ](RELEASE_QUICKSTART.md) สำหรับรุ่นฟรีที่ใช้ ad-hoc signature บน Mac และยังไม่มีใบรับรอง Apple/Windows รุ่นนี้เป็น Pre-release, ไม่มี `latest.json` และปิด updater เพื่อไม่ให้ถูกเสนอเป็นอัปเดตของรุ่นที่เซ็นแล้ว
 
 ขณะเตรียมรุ่น 0.1.0 ตั้ง `TAURI_SIGNING_PRIVATE_KEY` ใน GitHub Environment `release` แล้ว แต่ยังไม่มี Apple/Azure credentials หรือ `RELEASES_TOKEN` การอัปโหลดรุ่นทดสอบด้วย GitHub CLI บนเครื่องเจ้าของ repo ใช้บัญชีที่ล็อกอินอยู่ จึงยังไม่ต้องสร้าง `RELEASES_TOKEN`
 
 สำหรับการแจกแบบเซ็น: สมัคร [Apple Developer Program](https://developer.apple.com/programs/enroll/) (US$99/ปี ราคาท้องถิ่นอาจต่างกัน) แล้วสร้าง Developer ID Application certificate และส่งออก `.p12` พร้อม private key สำหรับ CI
 
 **ตรวจประเทศก่อนเลือก Azure:** ตาม [เงื่อนไข Public Trust](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) ที่ตรวจเมื่อ 14 ตุลาคม 2026 บุคคลทั่วไปต้องอยู่สหรัฐฯ หรือแคนาดา และประเทศไทยไม่อยู่ในรายชื่อประเทศขององค์กรที่รองรับ หากสมัครในไทย ต้องเลือกผู้ให้บริการ code-signing CA ที่รองรับผู้สมัครของคุณ หรือประเมิน Microsoft Store/MSIX แทน Workflow ปัจจุบันเตรียม Azure ไว้ แต่ยังไม่ผ่านการตั้งค่าบัญชีจริง และต้องปรับ integration หากเลือกผู้ให้บริการอื่น อย่าสมัคร Azure เสียเงินก่อนตรวจสิทธิ์นี้
+
+## macOS: “app is damaged” และข้อจำกัดของ Preview
+
+ตรวจพบว่า DMG 0.1.4 มี ARM executable ที่ linker เซ็นไว้แต่ไม่มี bundle resource seal ส่วน Intel ไม่ได้เซ็น รุ่น 0.1.5 ตั้ง `bundle.macOS.signingIdentity` เป็น `-` ให้ Tauri เซ็นแบบ ad-hoc ทั้ง bundle ก่อนแพ็ก DMG โดย signed workflow จะ override ด้วย Developer ID จาก Secrets
+
+`bash scripts/verify-macos-bundle.sh src-tauri/target/release/bundle preview` ตรวจ `codesign --verify --deep --strict` และ resource seal ทั้ง build output และแอปที่ mount จาก DMG; CI จะไม่อัปโหลดถ้าไม่ผ่าน โหมด `signed` ต้องผ่าน Developer ID authority, stapled ticket และ Gatekeeper เพิ่มด้วย ไม่ถือว่า ad-hoc ผ่านเกณฑ์ production
+
+Ad-hoc แก้ความสมบูรณ์ของลายเซ็น แต่ไม่ยืนยันตัวผู้พัฒนากับ Apple ผู้ใช้ที่เชื่อถือรุ่นทดสอบอาจต้องเปิดผ่าน System Settings → Privacy & Security → Open Anyway หลังลองเปิดแอปครั้งแรก ตาม [Apple Support](https://support.apple.com/en-us/102445) เครื่ององค์กรอาจไม่อนุญาต วิธีนี้ไม่รับประกันทุกเครื่องและไม่ใช่การแก้แบบ production
+
+การแจกโดยไม่ต้องอนุญาตผู้พัฒนาที่ไม่ผ่านการยืนยันต้องมี **Developer ID Application certificate + notarization** จาก Apple Developer Program ต้องให้เจ้าของสมัคร/ยืนยันตัวตนเอง ไม่สามารถสร้าง certificate นี้จาก updater key หรือ GitHub Secrets เปล่าได้
 
 ## โครงสร้างที่เตรียมให้
 
