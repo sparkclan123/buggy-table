@@ -59,12 +59,15 @@
           (b.saved?.lastUsed ?? 0) - (a.saved?.lastUsed ?? 0),
       ),
   );
-  onMount(() => dialog.showModal());
+  onMount(() => {
+    dialog.showModal();
+    dialog.querySelector('input')?.focus();
+  });
 </script>
 
 <dialog
   bind:this={dialog}
-  class="connection-manager"
+  class="connection-dialog connection-manager"
   aria-label="Connections"
   oncancel={(e) => {
     e.preventDefault();

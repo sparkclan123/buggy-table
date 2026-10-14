@@ -159,6 +159,7 @@ test('saved profiles load offline; search finds distant connections without conn
     ),
   ).toEqual([]);
   await page.keyboard.press('Control+k');
+  await expect(page.getByLabel('Search connections')).toBeFocused();
   await page.getByLabel('Search connections').fill('Client 49');
   await expect(page.getByRole('button', { name: /Client 49.*Disconnected/ })).toBeVisible();
   await page.getByRole('button', { name: /Client 49.*Disconnected/ }).click();

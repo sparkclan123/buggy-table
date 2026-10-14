@@ -215,7 +215,17 @@ impl Profiles {
         let mut profiles = self.read()?;
         if let Some(old) = profiles.iter_mut().find(|p| p.id == profile.id) {
             profile.pinned = old.pinned;
-            profile.layout = old.layout.clone();
+            // A bookmark can be edited to point at a different catalog. Do not
+            // restore table identities from the previous database or account.
+            if old.engine == profile.engine
+                && old.host == profile.host
+                && old.port == profile.port
+                && old.database == profile.database
+                && old.username == profile.username
+                && old.schema == profile.schema
+            {
+                profile.layout = old.layout.clone();
+            }
             *old = profile.clone();
         } else {
             profiles.push(profile.clone());
@@ -368,6 +378,37 @@ mod tests {
         fs::write(&store.path, b"not json").unwrap();
         assert!(store.put(fixture()).is_err());
         assert_eq!(fs::read(&store.path).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn editing_the_database_clears_previous_catalog_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Profiles::new(dir.path().to_owned());
+        let original = store.put(fixture()).unwrap();
+        store
+            .update(
+                &original.id,
+                ProfileLayout {
+                    selected_schema: "audit".into(),
+                    tabs: vec![SavedTab {
+                        schema: "audit".into(),
+                        table: "events".into(),
+                    }],
+                    active_tab: "audit.events".into(),
+                },
+                true,
+                "Tests".into(),
+            )
+            .unwrap();
+        let mut renamed = original.clone();
+        renamed.name = "Renamed".into();
+        assert_eq!(store.put(renamed).unwrap().layout.tabs.len(), 1);
+        let mut moved = original;
+        moved.database = "another_database".into();
+        let saved = store.put(moved).unwrap();
+        assert!(saved.layout.tabs.is_empty());
+        assert_eq!(saved.layout.selected_schema, "public");
+        assert!(saved.pinned);
     }
 }
 

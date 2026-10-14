@@ -16,12 +16,15 @@
   } = $props();
   let search = $state('');
   let dialog: HTMLDialogElement;
-  onMount(() => dialog.showModal());
+  onMount(() => {
+    dialog.showModal();
+    dialog.querySelector('input')?.focus();
+  });
 </script>
 
 <dialog
   bind:this={dialog}
-  class="schema-picker"
+  class="connection-dialog schema-picker"
   aria-label="Select schema"
   oncancel={(e) => {
     e.preventDefault();
