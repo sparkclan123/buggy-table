@@ -1,5 +1,6 @@
-buggy-table 0.1.3 — Preview
+buggy-table 0.1.4 — Preview
 
+- Move PostgreSQL schema selection to a native dropdown at the bottom of the sidebar. Move appearance selection into a compact icon beside the app version; System/Light/Dark preferences remain available.
 - Add saved connection bookmarks, pin/recent/search/group filters and explicit Reconnect after restarting. Optional passwords stay in Mac login Keychain / Windows Local Credential Manager.
 - Keep PostgreSQL/MySQL/Redis sessions and table tabs separate when switching; preserve unsaved cells and Redis inspection state.
 - Add searchable PostgreSQL schema selection; bind browse/SQL/index/save to the owning table schema.

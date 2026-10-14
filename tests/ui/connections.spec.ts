@@ -222,8 +222,7 @@ test('same-named tables in separate schemas retain tabs and save to their owning
   page,
 }) => {
   await start(page);
-  await page.getByRole('button', { name: 'Select PostgreSQL schema' }).click();
-  await page.getByRole('button', { name: 'audit', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Select PostgreSQL schema' }).selectOption('audit');
   await page.getByRole('button', { name: 'items', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'items · audit', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Edit row 1 label', exact: true }).click();

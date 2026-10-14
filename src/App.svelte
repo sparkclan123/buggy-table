@@ -6,7 +6,6 @@
     Plus,
     Search,
     ChevronRight,
-    ChevronDown,
     ShieldCheck,
     Activity,
     Settings2,
@@ -45,7 +44,6 @@
   import ConfirmClose from './components/ConfirmClose.svelte';
   import ConnectionDialog from './components/ConnectionDialog.svelte';
   import ConnectionManager from './components/ConnectionManager.svelte';
-  import SchemaPicker from './components/SchemaPicker.svelte';
   import { createRedisWorkspace } from './lib/redis-workspace';
   import {
     connectionWorkspace,
@@ -81,7 +79,6 @@
   let showConnection = $state(false);
   let connectionInitial = $state<SavedConnection | null>(null);
   let showManager = $state(false);
-  let showSchemas = $state(false);
   const quickConnections = $derived(
     entries
       .filter((e) => e.key !== 'sample')
@@ -426,19 +423,6 @@
     if (workspace.tab === 'data' && !workspace.result) await loadData();
   }
 
-  async function openSchemas() {
-    if (busy || !session.online) return;
-    busy = true;
-    try {
-      session.schemas = await api.schemas(connection.id);
-      showSchemas = true;
-    } catch (e) {
-      error = errorMessage(e);
-    } finally {
-      busy = false;
-    }
-  }
-
   async function changeSchema(schema: string) {
     if (busy) return;
     busy = true;
@@ -448,7 +432,6 @@
       session.navSchema = schema;
       if (!workspace.selectedName) workspace.schema = schema;
       session.search = '';
-      showSchemas = false;
       void persistLayout(session);
     } catch (e) {
       error = errorMessage(e);
@@ -467,12 +450,24 @@
     showConnection = false;
     showManager = false;
     error = result.warning ?? '';
+    let schemaWarning = '';
+    if (next.engine === 'postgres') {
+      busy = true;
+      try {
+        session.schemas = (await api.schemas(next.id)) ?? [next.schema];
+      } catch (e) {
+        schemaWarning = errorMessage(e);
+      } finally {
+        busy = false;
+      }
+    }
     if (entry.tabs[0].id === 'empty') {
       entry.tabs[0].schema = entry.navSchema;
       if (next.tables[0]) await selectTable(next.tables[0]);
     } else await activateTab(entry.activeId);
     if (entry.saved) void persistLayout(entry);
-    if (result.warning) error = result.warning;
+    if (result.warning || schemaWarning)
+      error = [result.warning, schemaWarning].filter(Boolean).join(' ');
   }
 
   async function reconnect(entry: ConnectionWorkspace) {
@@ -819,13 +814,6 @@
       {#if connection.engine === 'redis'}
         <div class="schema-root">Database {connection.database} · Standalone</div>
       {:else}
-        <button
-          class="schema-selector"
-          onclick={openSchemas}
-          disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
-          aria-label="Select PostgreSQL schema"
-          ><Columns3 size={13} /><span>{session.navSchema}</span><ChevronDown size={13} /></button
-        >
         <div class="table-search">
           <Search size={13} /><input
             aria-label="Search tables"
@@ -854,11 +842,31 @@
       {/if}
     </div>
     <div class="sidebar-bottom">
-      <ThemeControl />
+      <label class="schema-control">
+        <span>{connection.engine === 'postgres' ? 'Schema' : 'Database'}</span>
+        <select
+          aria-label="Select PostgreSQL schema"
+          value={session.navSchema}
+          disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
+          onchange={async (event) => {
+            const select = event.currentTarget;
+            await changeSchema(select.value);
+            select.value = session.navSchema;
+          }}
+        >
+          {#each [...new Set([session.navSchema, ...session.schemas])] as schema}
+            <option value={schema}>{schema}</option>
+          {/each}
+        </select>
+      </label>
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
-      <div class="sidebar-version"><span>buggy-table</span><span>v{__APP_VERSION__}</span></div>
+      <div class="sidebar-version">
+        <span>buggy-table</span><span class="version-actions"
+          >v{__APP_VERSION__}<ThemeControl /></span
+        >
+      </div>
     </div>
   </aside>
 
@@ -1421,15 +1429,8 @@
     onremove={removeConnection}
     onclose={() => (showManager = false)}
   />{/if}
-{#if showSchemas}<SchemaPicker
-    schemas={session.schemas}
-    current={session.navSchema}
-    {busy}
-    onselect={changeSchema}
-    onclose={() => (showSchemas = false)}
-  />{/if}
 <UpdateNotice
-  blocked={busy || anyDirty || showConnection || showManager || showSchemas}
+  blocked={busy || anyDirty || showConnection || showManager}
   bind:installing={updating}
 />
 

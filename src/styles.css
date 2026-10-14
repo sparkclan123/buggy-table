@@ -1070,16 +1070,45 @@ pre,
   grid-template-columns: 1fr;
 }
 
-.theme-control {
+.schema-control,
+.version-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+}
+.schema-control {
   margin-bottom: 8px;
   color: var(--muted);
 }
+.schema-control select {
+  min-width: 0;
+  flex: 1;
+}
+.sidebar-version {
+  align-items: center;
+}
+.theme-control {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.theme-control:hover {
+  background: var(--hover);
+}
+.theme-control:focus-within {
+  outline: 2px solid var(--focus);
+}
 .theme-control select {
-  max-width: 100px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 .update-control {
   position: fixed;
@@ -1137,8 +1166,7 @@ pre,
 }
 
 /* Connection navigation stays bounded; tables retain their own scroll area. */
-.connection-switcher,
-.schema-selector {
+.connection-switcher {
   width: 100%;
   justify-content: flex-start;
   padding: 5px 7px;
@@ -1200,16 +1228,6 @@ pre,
   border: 0;
   color: var(--muted);
 }
-.schema-selector {
-  border: 1px solid var(--line);
-}
-.schema-selector > span {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
 .connection-root > .icon-button {
   margin-left: auto;
 }
@@ -1217,11 +1235,6 @@ pre,
   width: 680px;
   max-height: 85vh;
   padding: 18px;
-}
-.schema-picker {
-  width: 360px;
-  max-height: 75vh;
-  padding: 16px;
 }
 .manager-heading {
   display: flex;
@@ -1239,8 +1252,7 @@ pre,
   gap: 7px;
   align-items: center;
 }
-.manager-search input,
-.schema-search {
+.manager-search input {
   width: 100%;
 }
 .manager-filters {
@@ -1306,17 +1318,4 @@ pre,
   gap: 6px;
   padding: 8px;
   font-size: 12px;
-}
-.schema-options {
-  display: grid;
-  gap: 3px;
-  max-height: 45vh;
-  overflow: auto;
-  margin-top: 10px;
-}
-.schema-options button {
-  justify-content: flex-start;
-}
-.schema-options button.current {
-  background: var(--selected);
 }
