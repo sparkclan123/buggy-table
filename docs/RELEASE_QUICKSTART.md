@@ -1,6 +1,6 @@
 # รัน buggy-table และปล่อยรุ่นทดสอบ
 
-รุ่น Mac `v0.1.5` แก้ลายเซ็น bundle ที่ทำให้ macOS แจ้ง “app is damaged” ใน 0.1.4 ใช้ ad-hoc signature และตรวจทั้งแอปก่อนแพ็กกับแอปใน DMG รุ่นนี้ยังเป็น **Pre-release** ไม่มี Apple Developer ID/notarization และไม่มี updater
+รุ่น Mac `v0.1.5` แก้เฉพาะความสมบูรณ์ของลายเซ็น bundle ของ 0.1.4 **ยังอาจขึ้น “damaged” และมีเฉพาะ Move to Trash ได้** ใช้ ad-hoc signature และตรวจทั้งแอปก่อนแพ็กกับแอปใน DMG รุ่นนี้ยังเป็น **Pre-release** ไม่มี Apple Developer ID/notarization และไม่มี updater
 
 ดาวน์โหลด Mac ที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.5
 Windows ใช้ 0.1.4 เดิม: https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4
@@ -13,7 +13,9 @@ Windows ใช้ 0.1.4 เดิม: https://github.com/sparkclan123/buggy-tabl
 
 ผู้ใช้ทั่วไปไม่ต้องลง Rust หรือ Node.js บน Mac ให้เปิด DMG แล้วลาก buggy-table ไป Applications แทนตัวเก่า โดยไม่ลบโฟลเดอร์ข้อมูลแอป ค่าการเชื่อมต่อเดิมยังอยู่
 
-รุ่นนี้ยังไม่ผ่าน Apple notarization: หลังลองเปิดครั้งแรก ถ้า macOS แจ้งว่าไม่สามารถตรวจสอบผู้พัฒนา และคุณเชื่อถือไฟล์ที่ดาวน์โหลดจาก repo นี้ ให้ไป **System Settings → Privacy & Security → Open Anyway → Open** ตาม [ขั้นตอน Apple](https://support.apple.com/en-us/102445) เครื่องที่องค์กรดูแลอาจห้ามอนุญาตเอง ไม่ต้องปิด Gatekeeper หรือใช้คำสั่งลบ quarantine
+รุ่นนี้ยังไม่ผ่าน Apple notarization: หลังลองเปิดครั้งแรก ถ้า macOS แจ้งว่าไม่สามารถตรวจสอบผู้พัฒนา และคุณเชื่อถือไฟล์ที่ดาวน์โหลดจาก repo นี้ หากระบบมีตัวเลือก ให้ไป **System Settings → Privacy & Security → Open Anyway → Open** ตาม [ขั้นตอน Apple](https://support.apple.com/en-us/102445) เครื่องที่องค์กรดูแลอาจห้ามอนุญาตเอง ไม่ต้องปิด Gatekeeper หรือใช้คำสั่งลบ quarantine
+
+หากมีเฉพาะ Move to Trash ไม่มี Open Anyway แสดงว่าคำแนะนำนี้ใช้กับเครื่องนั้นไม่ได้ รุ่นปัจจุบันยังไม่ผ่านเกณฑ์แจกของ Apple ต้องใช้ Developer ID + notarization เพื่อแก้การแจกอย่างถูกต้อง
 
 หากไฟล์ 0.1.5 ยังขึ้น “damaged” ให้หยุดและตรวจ SHA-256 กับ `SHA256SUMS.txt` พร้อมรายงานเวอร์ชัน macOS/ชนิดชิป อย่าใช้ Open Anyway กับไฟล์ที่ตรวจความสมบูรณ์ไม่ผ่าน
 

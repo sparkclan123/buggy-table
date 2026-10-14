@@ -17,7 +17,13 @@ if (process.platform === 'darwin') {
     'APPLE_TEAM_ID',
   ])
     required(name);
-  bundle.macOS = { signingIdentity: required('APPLE_SIGNING_IDENTITY') };
+  const identity = required('APPLE_SIGNING_IDENTITY');
+  if (!identity.startsWith('Developer ID Application: ')) {
+    throw new Error(
+      'macOS distribution requires a Developer ID Application identity, not ad-hoc or development signing',
+    );
+  }
+  bundle.macOS = { signingIdentity: identity };
 } else if (process.platform === 'win32') {
   for (const name of [
     'AZURE_CLIENT_ID',

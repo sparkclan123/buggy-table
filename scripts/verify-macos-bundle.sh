@@ -18,6 +18,10 @@ verify_app() {
     codesign --display --verbose=4 "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'
     xcrun stapler validate "$app"
     spctl --assess --type execute --verbose=4 "$app"
+    # Available on macOS 14+. Checks more than signature integrity alone.
+    if [ -x /usr/bin/syspolicy_check ]; then
+      /usr/bin/syspolicy_check distribution "$app"
+    fi
   fi
 }
 
@@ -41,7 +45,9 @@ trap cleanup EXIT
 hdiutil attach "${images[0]}" -readonly -nobrowse -mountpoint "$mount_dir"
 mounted=true
 verify_app "$mount_dir/buggy-table.app"
-echo "macOS $mode bundle and packaged app verified."
 if [ "$mode" = preview ]; then
-  echo "Ad-hoc integrity check only: this is NOT Developer ID or notarization approval."
+  echo "Preview integrity checks passed for the bundle and packaged app."
+  echo "NOT distribution approval: ad-hoc apps may be blocked with only Move to Trash."
+else
+  echo "Signed macOS bundle and packaged app passed distribution policy checks."
 fi

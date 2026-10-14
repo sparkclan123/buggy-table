@@ -1,5 +1,7 @@
 buggy-table 0.1.5 — Preview
 
+> **Known macOS installation blocker:** This preview is ad-hoc signed and not notarized. macOS can still show “damaged” with only “Move to Trash”; an Open Anyway option is not guaranteed. Version 0.1.5 fixes bundle integrity only, not Gatekeeper acceptance. A Developer ID signed and notarized release is required for normal distribution and is not available yet.
+
 - Fix incomplete macOS bundle signatures that could cause “app is damaged” on downloaded builds. Both Apple Silicon and Intel previews now use complete ad-hoc signatures.
 - Verify signatures and sealed resources in both the build output and the app inside each DMG before uploading installers.
 - Signed production builds additionally require Developer ID, a stapled notarization ticket and Gatekeeper acceptance.
@@ -25,6 +27,6 @@ This preview has no Apple Developer ID/notarization or Windows Authenticode cert
 
 ## Install on Mac
 
-Download the DMG for your chip, open it, and drag buggy-table to Applications (replace the old app). This preview is ad-hoc signed, **not Apple Developer ID signed or notarized**. On first launch, macOS may block it as an unverified developer. If you trust this release, open System Settings → Privacy & Security → Open Anyway after attempting to launch it, then confirm Open. Managed Macs may prohibit this. Do not disable Gatekeeper. See [Apple’s opening instructions](https://support.apple.com/en-us/102445).
+Download the DMG for your chip, open it, and drag buggy-table to Applications (replace the old app). This preview is ad-hoc signed, **not Apple Developer ID signed or notarized**. On first launch, macOS may block it as an unverified developer. If macOS offers Open Anyway and you trust this release, follow Apple’s instructions. If it only offers Move to Trash, this preview has no guaranteed opening flow; use a Developer ID signed and notarized build when available. Managed Macs may prohibit overrides. Do not disable Gatekeeper. See [Apple’s opening instructions](https://support.apple.com/en-us/102445).
 
 This fixes bundle integrity; it does not promise warning-free installation. Warning-free distribution requires Apple Developer ID and notarization. Saved connection settings remain in the existing app data location; do not delete that folder when replacing the app.

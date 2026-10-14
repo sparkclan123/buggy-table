@@ -107,3 +107,11 @@ Public distribution: https://github.com/sparkclan123/buggy-table-releases/releas
 - Source commit `cf7d1bc206d3dfa97e6b7e4a30c55d2b9c0981bd`, tag `preview/v0.1.5`. GitHub Check run `38506595822` was blocked before execution by account payment/spending limits; it is not a passing CI run.
 - Gatekeeper still rejects ad-hoc as untrusted: no Developer ID identity or notarization credentials are configured. This release does not claim automatic acceptance on other Macs. The standard per-app Open Anyway flow has not been tested on a clean second Mac. Managed-device policy may disallow it.
 - Staged ARM DMG SHA-256: `e9006414e0c21e2572e4979ef688b5790ad8d12d07b88e9b7e99a0aeaf438976`; Intel: `cac0fe69b4a8d7aa7dafaedf513438f29adc96d502caa8085d2a916648469809`. All four draft asset digests matched local files before publishing. Windows remains on 0.1.4.
+
+## Follow-up: Gatekeeper still blocks 0.1.5
+
+- Downloaded the public ARM DMG again; SHA-256 matched `e9006414e0c21e2572e4979ef688b5790ad8d12d07b88e9b7e99a0aeaf438976`. Extracted to an isolated test directory and added quarantine to that copy only.
+- Strict/deep codesign validation passes, but `syspolicy_check distribution --json` exits 70: `Adhoc Signed App` and fatal `Notary Ticket Missing`. `spctl --assess --type execute` exits 3 (`rejected`). This is not a distribution-ready release.
+- GUI launch on the development Mac was inconclusive (automation timed out and a translocated process started). The exact other-machine dialog has not been reproduced on a clean Mac. Do not treat a developer-machine launch as a Gatekeeper acceptance test. No quarantine attributes were removed and no Gatekeeper settings were disabled.
+- Signed-release verification now runs syspolicy_check when available, in addition to Developer ID authority, stapler and spctl checks. Signing configuration rejects ad-hoc/development identities before building.
+- Release documentation now explicitly states that Open Anyway may be unavailable. A new signed release is blocked by the absence of Apple Developer ID credentials; rebuilding with ad-hoc signing cannot fulfill normal Mac distribution.

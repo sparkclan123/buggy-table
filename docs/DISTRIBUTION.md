@@ -18,6 +18,8 @@
 
 `bash scripts/verify-macos-bundle.sh src-tauri/target/release/bundle preview` ตรวจ `codesign --verify --deep --strict` และ resource seal ทั้ง build output และแอปที่ mount จาก DMG; CI จะไม่อัปโหลดถ้าไม่ผ่าน โหมด `signed` ต้องผ่าน Developer ID authority, stapled ticket และ Gatekeeper เพิ่มด้วย ไม่ถือว่า ad-hoc ผ่านเกณฑ์ production
 
+ตรวจซ้ำหลังมีรายงานว่า 0.1.5 ยังขึ้น Move to Trash: `syspolicy_check distribution` ของไฟล์ release ที่ดาวน์โหลดใหม่รายงาน `Adhoc Signed App` และ `Notary Ticket Missing` (exit 70) จึงยังไม่พร้อมแจกตามนโยบาย macOS แม้ `codesign` ผ่าน ห้ามสรุปว่าแก้อาการ damaged ครบจากการตรวจ signature อย่างเดียว
+
 Ad-hoc แก้ความสมบูรณ์ของลายเซ็น แต่ไม่ยืนยันตัวผู้พัฒนากับ Apple ผู้ใช้ที่เชื่อถือรุ่นทดสอบอาจต้องเปิดผ่าน System Settings → Privacy & Security → Open Anyway หลังลองเปิดแอปครั้งแรก ตาม [Apple Support](https://support.apple.com/en-us/102445) เครื่ององค์กรอาจไม่อนุญาต วิธีนี้ไม่รับประกันทุกเครื่องและไม่ใช่การแก้แบบ production
 
 การแจกโดยไม่ต้องอนุญาตผู้พัฒนาที่ไม่ผ่านการยืนยันต้องมี **Developer ID Application certificate + notarization** จาก Apple Developer Program ต้องให้เจ้าของสมัคร/ยืนยันตัวตนเอง ไม่สามารถสร้าง certificate นี้จาก updater key หรือ GitHub Secrets เปล่าได้
