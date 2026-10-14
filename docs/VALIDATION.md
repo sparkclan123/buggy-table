@@ -85,3 +85,14 @@ Native macOS ARM64 0.1.2 `.app` and `.dmg` built successfully (15.42 MiB / 8.27 
 Packaged Mac ARM64 smoke test: simultaneously connected to PostgreSQL 18, MySQL 8.4 and Redis 8 through actual Tauri IPC. Opened public/edit_items and audit/edit_items in separate tabs, retained an audit draft while switching to MySQL, then saved/refreshed it. Independent psql confirmed only audit changed. Redis key/type/TTL/value remained visible after switching away/back. Quit/reopened: all three bookmarks were offline, PostgreSQL reconnected using login Keychain with its audit tab restored, and MySQL (password not saved) reopened the prefilled form with an empty password. The local JSON contained neither fixture passwords nor saved/preview row values and had mode 0600. The manager's search receives keyboard focus immediately; dialogs share the app's theme styling. A regression test also ensures changing a bookmark's database/account clears stale catalog tabs while a name-only edit preserves them (15 non-fixture Rust unit tests total).
 
 macOS ARM64 `.app` and `.dmg` build successfully (15.75 MiB / 8.39 MiB); DMG checksum verification passes. Windows/Intel native installer results are separate CI artifacts, not a claim of native execution on this Mac.
+
+
+## Sidebar controls and public preview — 0.1.4, 2026-10-14
+
+The PostgreSQL schema selector is now a native dropdown at the bottom of the sidebar. Theme preferences remain System/Light/Dark, accessed through a compact icon beside the app/version. The obsolete schema modal and styles were removed. Schema options load when connecting; query/save scope continues to belong to each table tab.
+
+64 Chromium/WebKit UI cases pass, including real dropdown selection through IPC fixtures and persistent theme preferences. Native Mac 0.1.4 opens the theme menu from the footer icon. No production database was connected during this UI smoke test.
+
+GitHub Check run 38496464089 passed every job: PostgreSQL 15–18, integration/UI, macOS and Windows. Windows Credential Manager roundtrip succeeded and asserted Local persistence. Installer run 38496464150 built Mac ARM64, Mac Intel and Windows x64 from b46a10861a4225ddf474daa98c9df99e30f9124e, tagged preview/v0.1.4 and merged into main through PR #2. Both downloaded DMGs pass checksum verification and contain version 0.1.4 with the expected arm64/x86_64 architecture. Windows installer build succeeds; interactive Windows installation has not been tested on this Mac.
+
+Public distribution: https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4. The release includes SHA-256 checksums and build provenance. It remains an unsigned preview with in-app updates disabled; no Apple/Azure signing credentials were supplied.
