@@ -54,3 +54,22 @@ Performance budgets in `DATABASE_TOOL_PLAN.md` remain targets. Bundle size alone
 - Built local Mac ARM `.app`, `.dmg` and signed updater archive; validated DMG checksum and updater signature/public key/bound version. A corrupted copy was rejected with `InvalidSignature`. OS certificate/notarization and two-version installation are still pending owner-provided signing secrets.
 - GitHub Windows checks exposed CRLF checkout differences; added `.gitattributes` to keep source text LF across platforms. Fresh CI runs validate the renamed installers.
 - JavaScript dependency audit: 0 advisories. Cargo still reports the two existing quick-xml advisories documented in SECURITY_REVIEW.md; no advisory suppression.
+
+## PostgreSQL version compatibility — 0.1.2, 2026-10-14
+
+Separate loopback-only disposable Docker projects were used, leaving the existing development database in place. The integration test asserts the server major matches the requested matrix version.
+
+| PostgreSQL server | Integration tests | Encrypted authentication/query proxy test |
+| --- | --- | --- |
+| 15.19 | 19 passed | 1 passed |
+| 16.15 | 19 passed | 1 passed |
+| 17.11 | 19 passed | 1 passed |
+| 18.6 | 19 passed | 1 passed |
+
+Coverage includes connect, schema/column discovery, browse/filter/sort/paging, exact values, SQL/EXPLAIN, indexes/status, save/rollback/conflict, privilege drift, cancellation/disconnect and plaintext rejection for TLS modes. The new test verifies generated and identity columns remain non-editable even with table-level UPDATE grants; PostgreSQL 18 virtual columns are excluded from browsing and SQL scope.
+
+The upper version gate is removed. Unit coverage accepts 15–18 and future version numbers while rejecting older/malformed versions. Browser IPC stubs verify 15–18 connect without a notice and a hypothetical 19 shows an untested-compatibility notice. This is not a real PostgreSQL 19 compatibility test.
+
+52 Chromium/WebKit UI tests, 12 Rust unit tests, 2 non-fixture integration validation tests, 3 frontend tests and the release-manifest test passed. Svelte/TypeScript, Clippy, rustfmt, Prettier, version consistency and actionlint passed. The new CI matrix repeats real database tests for 15–18. No production credentials or production database queries were used; the user's remote database has not been authenticated by this test run.
+
+Native macOS ARM64 0.1.2 `.app` and `.dmg` built successfully (15.42 MiB / 8.27 MiB). DMG checksum verification passed. In the packaged Tauri app, connected to the isolated PostgreSQL 18.6 fixture, opened customers and edit_items as separate tabs, edited a cell inline, saved with Command-S, refreshed with Command-R and viewed the live server/status snapshot. Independent psql confirmed both the saved value and stored generated column. The smoke test used only disposable fixture credentials/data. Windows 0.1.2 installer/native execution is not validated locally.

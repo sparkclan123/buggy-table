@@ -4,12 +4,19 @@ use table_por::{models::*, service::Workbench};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
+fn fixture_port() -> u16 {
+    std::env::var("BUGGY_TEST_POSTGRES_PORT")
+        .unwrap_or_else(|_| "15432".into())
+        .parse()
+        .expect("valid fixture port")
+}
+
 fn request() -> ConnectRequest {
     ConnectRequest {
         engine: Engine::Postgres,
         name: "Test reader".into(),
         host: "127.0.0.1".into(),
-        port: 15432,
+        port: fixture_port(),
         database: "tablepor_test".into(),
         username: "tablepor_reader".into(),
         password: "local-reader-only".into(),
@@ -43,7 +50,7 @@ fn browse(connection_id: &str) -> BrowseRequest {
 }
 
 async fn admin() -> (tokio_postgres::Client, tokio::task::JoinHandle<()>) {
-    let (client, connection) = tokio_postgres::connect("host=127.0.0.1 port=15432 dbname=tablepor_test user=fixture_admin password=local-fixture-admin", NoTls).await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&format!("host=127.0.0.1 port={} dbname=tablepor_test user=fixture_admin password=local-fixture-admin", fixture_port()), NoTls).await.unwrap();
     (
         client,
         tokio::spawn(async move {
@@ -58,12 +65,22 @@ async fn reader_can_browse_query_inspect_and_observe() {
     let app = Workbench::default();
     let info = app.connect(request()).await.unwrap();
     assert!(info.tables.iter().any(|t| t.name == "orders"));
-    assert!(
-        !info
-            .tables
-            .iter()
-            .any(|t| ["orders_view", "rls_table", "custom_payload"].contains(&t.name.as_str()))
-    );
+    if let Ok(expected) = std::env::var("BUGGY_TEST_POSTGRES_VERSION") {
+        assert_eq!(
+            info.server_version.parse::<u32>().unwrap() / 10_000,
+            expected.parse::<u32>().unwrap(),
+            "matrix must use the requested server major"
+        );
+    }
+    assert!(!info.tables.iter().any(|t| {
+        [
+            "orders_view",
+            "rls_table",
+            "custom_payload",
+            "virtual_items",
+        ]
+        .contains(&t.name.as_str())
+    }));
     let page = app.browse(browse(&info.id)).await.unwrap();
     assert_eq!(page.rows.len(), 200);
     assert!(page.truncated);
@@ -168,7 +185,7 @@ async fn refuses_admin_accounts_and_destructive_sql() {
 #[tokio::test]
 #[ignore = "requires the disposable Compose fixture"]
 async fn server_role_denies_writes_even_without_app_policy() {
-    let (client, connection) = tokio_postgres::connect("host=127.0.0.1 port=15432 dbname=tablepor_test user=tablepor_reader password=local-reader-only", NoTls).await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&format!("host=127.0.0.1 port={} dbname=tablepor_test user=tablepor_reader password=local-reader-only", fixture_port()), NoTls).await.unwrap();
     let task = tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -723,4 +740,46 @@ async fn filters_and_sort_columns_remain_bounded_and_catalog_checked() {
     let mut r = browse(&info.id);
     r.sort_column = Some("id; DELETE FROM orders".into());
     assert_eq!(app.browse(r).await.unwrap_err().code, "POLICY_DENIED");
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn generated_and_identity_columns_are_not_editable() {
+    let app = Workbench::default();
+    let info = app.connect(editor_request()).await.unwrap();
+    let table = info
+        .tables
+        .iter()
+        .find(|t| t.name == "generated_items")
+        .unwrap();
+    for name in ["sequence", "label_copy"] {
+        assert!(
+            !table
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap()
+                .editable
+        );
+    }
+    assert!(
+        table
+            .columns
+            .iter()
+            .find(|c| c.name == "label")
+            .unwrap()
+            .editable
+    );
+    // Virtual columns must be excluded from both browsing and arbitrary SQL scope.
+    if info.server_version.parse::<u32>().unwrap() >= 180_000 {
+        assert!(!info.tables.iter().any(|t| t.name == "virtual_items"));
+        assert!(
+            app.query(query(&info.id, "SELECT * FROM public.virtual_items"))
+                .await
+                .is_err()
+        );
+        let mut request = browse(&info.id);
+        request.table = "virtual_items".into();
+        assert!(app.browse(request).await.is_err());
+    }
 }

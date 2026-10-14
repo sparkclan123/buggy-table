@@ -70,3 +70,19 @@ INSERT INTO public.edit_composite VALUES (1,1,'one'),(2,1,'two');
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO tablepor_editor, tablepor_reader;
 GRANT UPDATE(label,note,amount) ON public.edit_items TO tablepor_editor;
 GRANT UPDATE ON public.edit_no_key, public.edit_composite TO tablepor_editor;
+
+-- Grant UPDATE on the whole table so metadata, not just grants, protects these columns.
+CREATE TABLE public.generated_items (
+  id integer PRIMARY KEY, sequence bigint GENERATED ALWAYS AS IDENTITY,
+  label text, label_copy text GENERATED ALWAYS AS (label) STORED
+);
+GRANT SELECT ON public.generated_items TO tablepor_reader, tablepor_editor;
+GRANT UPDATE ON public.generated_items TO tablepor_editor;
+
+-- PostgreSQL 18 added virtual generated columns, which execute when read.
+DO $$ BEGIN
+  IF current_setting('server_version_num')::integer >= 180000 THEN
+    EXECUTE 'CREATE TABLE public.virtual_items (id integer PRIMARY KEY, computed integer GENERATED ALWAYS AS (id + 1) VIRTUAL)';
+    EXECUTE 'GRANT SELECT ON public.virtual_items TO tablepor_reader, tablepor_editor';
+  END IF;
+END $$;

@@ -2,7 +2,7 @@
 
 A personal, local-first database workspace built with **Rust, Tauri 2, Svelte and TypeScript**.
 
-รุ่นนี้รองรับ **PostgreSQL 17, MySQL 8.x และ Redis standalone** โดย PostgreSQL อ่าน/แก้ไขเซลล์ได้ ส่วน MySQL และ Redis เปิดแบบอ่านอย่างเดียว มีหน้าตัวอย่างสำหรับลอง UI โดยไม่ต้องเชื่อมฐานข้อมูล ยังไม่ครบทุกข้อในแผนระยะยาว
+รุ่นนี้รองรับ **PostgreSQL 15–18, MySQL 8.x และ Redis standalone** โดย PostgreSQL อ่าน/แก้ไขเซลล์ได้ ส่วน MySQL และ Redis เปิดแบบอ่านอย่างเดียว มีหน้าตัวอย่างสำหรับลอง UI โดยไม่ต้องเชื่อมฐานข้อมูล ยังไม่ครบทุกข้อในแผนระยะยาว
 
 ## ใช้งานได้แล้ว
 

@@ -72,6 +72,9 @@
         : 'PostgreSQL',
   );
   const isSample = $derived(connection.id === 'sample');
+  const untestedPostgres = $derived(
+    !isSample && connection.engine === 'postgres' && Number(connection.serverVersion) >= 190000,
+  );
   const selected = $derived(connection.tables.find((t) => t.name === workspace.selectedName));
   const visibleTables = $derived(
     connection.tables.filter((t) => t.name.toLowerCase().includes(search.toLowerCase())),
@@ -579,6 +582,10 @@
           ><button onclick={openConnection} disabled={busy}
             >Connect your database<ArrowUpRight size={14} /></button
           >
+        </div>{/if}
+      {#if untestedPostgres}<div class="sample-banner" role="status">
+          PostgreSQL {Math.floor(Number(connection.serverVersion) / 10000)} · Compatibility not yet tested.
+          Tested versions: 15–18.
         </div>{/if}
       {#if error}<div class="error-banner global-error" role="alert">
           <ShieldCheck size={18} /><span>{error}</span><button

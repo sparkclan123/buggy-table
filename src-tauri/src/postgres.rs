@@ -312,6 +312,17 @@ pub(crate) fn query_error(error: tokio_postgres::Error) -> AppError {
     }
 }
 
+// No upper gate: future PostgreSQL releases may connect, with a UI notice until tested.
+fn validate_server_version(version: &str) -> AppResult<()> {
+    if !version.parse::<u32>().is_ok_and(|v| v >= 150_000) {
+        return Err(AppError::new(
+            "UNSUPPORTED_VERSION",
+            "PostgreSQL 15 or newer is required. Versions 15–18 are tested; newer versions can connect with compatibility unverified.",
+        ));
+    }
+    Ok(())
+}
+
 impl Database {
     pub async fn preflight(&self) -> AppResult<String> {
         if !self.manual_edits {
@@ -349,21 +360,14 @@ impl Database {
             .await
             .map_err(query_error)?;
         let version: String = row.get(0);
-        if !version
-            .parse::<u32>()
-            .is_ok_and(|v| (170_000..180_000).contains(&v))
-        {
-            return Err(AppError::new(
-                "UNSUPPORTED_VERSION",
-                "This preview enables PostgreSQL 17. Other versions need compatibility tests before they are enabled.",
-            ));
-        }
+        validate_server_version(&version)?;
         Ok(version)
     }
 
     pub async fn tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
         // Exclude views, foreign/partitioned/inherited parents, RLS policies and
-        // custom types; these can hide executable dependencies behind a SELECT.
+        // custom types and virtual/unknown generated kinds; these can hide executable
+        // dependencies behind a SELECT (virtual columns were added in PostgreSQL 18).
         let rows = self.client.query(
             "SELECT c.oid, c.relname, c.reltuples::bigint FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -371,7 +375,7 @@ impl Database {
                AND has_table_privilege(c.oid, 'SELECT')
                AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid)
                AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-                 AND a.atttypid NOT IN (16,20,21,23,25,700,701,1042,1043,1082,1083,1114,1184,1186,1266,1700,2950))
+                 AND (a.attgenerated NOT IN ('', 's') OR a.atttypid NOT IN (16,20,21,23,25,700,701,1042,1043,1082,1083,1114,1184,1186,1266,1700,2950)))
              ORDER BY c.relname LIMIT 501", &[&schema]).await.map_err(query_error)?;
         if rows.len() > 500 {
             return Err(AppError::new(
@@ -712,6 +716,21 @@ mod connection_tests {
         net::{TcpListener, TcpStream},
     };
 
+    #[test]
+    fn supported_and_future_versions_are_not_blocked() {
+        for version in [
+            "150000", "150018", "160000", "170007", "180000", "190000", "200001",
+        ] {
+            assert!(validate_server_version(version).is_ok(), "{version}");
+        }
+        for version in ["140999", "90624", "0", "", "unknown"] {
+            assert_eq!(
+                validate_server_version(version).unwrap_err().code,
+                "UNSUPPORTED_VERSION"
+            );
+        }
+    }
+
     fn certificate() -> (String, String) {
         let key = rcgen::KeyPair::from_pem(include_str!("../tests/fixtures/tls/test-only-key.pem"))
             .unwrap();
@@ -855,7 +874,13 @@ mod connection_tests {
             assert_eq!(request, [0, 0, 0, 8, 4, 210, 22, 47]);
             socket.write_all(b"S").await.unwrap();
             let mut tls = acceptor.accept(socket).await.unwrap();
-            let mut fixture = TcpStream::connect("127.0.0.1:15432").await.unwrap();
+            let fixture_port = std::env::var("BUGGY_TEST_POSTGRES_PORT")
+                .unwrap_or_else(|_| "15432".into())
+                .parse::<u16>()
+                .unwrap();
+            let mut fixture = TcpStream::connect(("127.0.0.1", fixture_port))
+                .await
+                .unwrap();
             let _ = tokio::io::copy_bidirectional(&mut tls, &mut fixture).await;
         });
         let mut r = request(port, TlsMode::Require);

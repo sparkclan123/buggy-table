@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:${BUGGY_TEST_POSTGRES_VERSION:-17}-alpine
+    ports:
+      - "127.0.0.1:${BUGGY_TEST_POSTGRES_PORT:-25432}:5432"
+    environment:
+      POSTGRES_DB: tablepor_test
+      POSTGRES_USER: fixture_admin
+      POSTGRES_PASSWORD: local-fixture-admin
+      # Explicit path also works with the PostgreSQL 18 image layout.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./fixtures/postgres.sql:/docker-entrypoint-initdb.d/01-fixture.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fixture_admin -d tablepor_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data

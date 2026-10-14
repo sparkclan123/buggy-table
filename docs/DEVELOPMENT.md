@@ -21,7 +21,9 @@
 
 ## PostgreSQL security boundary
 
-Only PostgreSQL 17 is enabled in this first build because it is the version exercised by the integration fixture. Expand the version gate only after running the same security/cancellation suite on the added version.
+PostgreSQL 15–18 are covered by the same integration/security/cancellation suite in the `postgres-compatibility` CI matrix. PostgreSQL 15 is the minimum; there is no upper version gate. Newer majors can attempt a connection and receive a visible compatibility notice, not a guarantee of support. Catalog validation, strict-reader checks, SQL policy and transaction restrictions are still enforced on every version. Tables with virtual or unknown generated-column kinds are excluded from the approved scope; stored generated and identity columns remain non-editable.
+
+To validate a future stable major, add it to `.github/workflows/check.yml`, run the suite below, inspect catalog/protocol changes and then update the tested-version notice and documentation. Do not mark a version tested based only on a successful connection.
 
 Queries use an isolated connection, `BEGIN READ ONLY`, fixed `search_path=pg_catalog`, `standard_conforming_strings=on`, 10-second statement timeout, 1.5-second lock timeout and 10-second idle-in-transaction timeout. Application deadlines cover connection/preflight/execution and cancellation closes the dedicated connection. A cancel request is not presented as proof the server has already finished stopping work.
 
@@ -75,6 +77,19 @@ Sessions now use an explicit Postgres/Mysql/Redis enum. Shared job limits and ca
 ## Test fixture
 
 `compose.yaml` binds PostgreSQL/MySQL/Redis only to loopback ports 15432/13306/16379. PostgreSQL/MySQL use tmpfs; Redis persistence is disabled. All data and accounts are disposable fixtures. The committed credentials are fixture credentials, not deployment secrets. Integration tests deliberately grant/revoke permissions and acquire locks on these fixture tables. They must never be pointed at another database.
+
+Run a specific PostgreSQL version from the repository root (requires Docker and Rust):
+
+```sh
+export BUGGY_TEST_POSTGRES_VERSION=18
+export BUGGY_TEST_POSTGRES_PORT=25432
+docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml up -d --wait
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test postgres_integration -- --include-ignored --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib encrypted_connection_authenticates_and_queries_through_tls -- --ignored
+docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml down
+```
+
+Use 15, 16, 17 or 18. Bring the fixture down before changing versions. This separate Compose project does not replace the default development database. The test verifies the actual server major matches the requested matrix entry. `PGDATA` is explicit for compatibility with the PostgreSQL 18 image layout. New fixture tables require recreating an existing disposable test database, never applying the fixture to a real database.
 
 Read-only and mutation tests operate at two levels: application policy and the server role directly without the application. Cancellation is tested with a blocked query, and precision tests cover bigint beyond JavaScript's integer range, exact decimal strings and NULL.
 
