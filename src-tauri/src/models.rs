@@ -45,6 +45,8 @@ pub struct ConnectRequest {
     pub schema: String,
     pub tls: TlsMode,
     #[serde(default)]
+    pub root_ca_pem: String,
+    #[serde(default)]
     pub manual_edits: bool,
 }
 
@@ -61,6 +63,7 @@ pub enum Engine {
 #[serde(rename_all = "camelCase")]
 pub enum TlsMode {
     VerifyFull,
+    Require,
     LocalOnly,
 }
 

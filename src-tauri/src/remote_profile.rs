@@ -17,6 +17,12 @@ pub struct RemoteProfile {
 impl RemoteProfile {
     pub fn new(r: ConnectRequest) -> AppResult<Self> {
         let password = Zeroizing::new(r.password);
+        if r.tls == TlsMode::Require || !r.root_ca_pem.is_empty() {
+            return Err(AppError::new(
+                "INVALID_CONNECTION",
+                "Custom TLS settings are currently supported for PostgreSQL only.",
+            ));
+        }
         if r.manual_edits {
             return Err(AppError::policy(
                 "MySQL and Redis connections are read-only in this release.",

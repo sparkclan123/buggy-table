@@ -1,5 +1,5 @@
 export type Engine = 'postgres' | 'mysql' | 'redis';
-export type TlsMode = 'verifyFull' | 'localOnly';
+export type TlsMode = 'verifyFull' | 'require' | 'localOnly';
 export interface ConnectRequest {
   engine: Engine;
   name: string;
@@ -10,6 +10,7 @@ export interface ConnectRequest {
   password: string;
   schema: string;
   tls: TlsMode;
+  rootCaPem?: string;
   manualEdits: boolean;
 }
 export interface ColumnInfo {

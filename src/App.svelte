@@ -882,7 +882,7 @@
         <div class="workspace-footnote">
           <LockKeyhole size={12} />{isSample
             ? 'Sample data is generated in this app. No database is connected.'
-            : `Direct connection to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : 'Local loopback, unencrypted'} · Session-only credentials`}
+            : `Direct connection to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : connection.tls === 'require' ? 'TLS · certificate not verified' : 'Local loopback, unencrypted'} · Session-only credentials`}
         </div>
       {:else if page === 'overview'}
         <div class="page-heading">
@@ -1025,7 +1025,9 @@
                 ? 'Not applicable'
                 : connection.tls === 'verifyFull'
                   ? 'Verified TLS, minimum TLS 1.2'
-                  : 'Unencrypted · literal loopback IP only'}
+                  : connection.tls === 'require'
+                    ? 'Encrypted TLS, minimum TLS 1.2 · certificate not verified'
+                    : 'Unencrypted · literal loopback IP only'}
             </dd>
             <dt>Reader</dt>
             <dd>{isSample ? 'Not applicable' : connection.username}</dd>

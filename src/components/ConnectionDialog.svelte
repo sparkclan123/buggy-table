@@ -14,6 +14,9 @@
     database = engine === 'redis' ? '0' : '';
     schema = engine === 'postgres' ? 'public' : '';
     manualEdits = engine === 'postgres';
+    if (tls === 'require') tls = 'verifyFull';
+    rootCaPem = '';
+    caName = '';
     password = '';
     error = '';
   }
@@ -25,15 +28,41 @@
   let password = $state('');
   let schema = $state('public');
   let tls = $state<TlsMode>('verifyFull');
+  let rootCaPem = $state('');
+  let caName = $state('');
+  let readingCa = $state(false);
   let manualEdits = $state(true);
   let busy = $state(false);
   let error = $state('');
   let dialog: HTMLDialogElement;
   onMount(() => dialog.showModal());
 
+  async function readCa(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    rootCaPem = '';
+    caName = '';
+    error = '';
+    if (!file) return;
+    readingCa = true;
+    try {
+      if (file.size > 64 * 1024) throw new Error('CA files must be at most 64 KiB.');
+      const pem = await file.text();
+      if (!pem.trim().startsWith('-----BEGIN CERTIFICATE-----') || pem.includes('PRIVATE KEY'))
+        throw new Error('Choose a PEM CA certificate, not a private key.');
+      rootCaPem = pem;
+      caName = file.name;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not read the CA certificate file.';
+      input.value = '';
+    } finally {
+      readingCa = false;
+    }
+  }
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || readingCa) return;
     busy = true;
     error = '';
     const request: ConnectRequest = {
@@ -46,6 +75,7 @@
       password,
       schema: engine === 'postgres' ? schema : database,
       tls,
+      rootCaPem: engine === 'postgres' && tls === 'verifyFull' ? rootCaPem : '',
       manualEdits: engine === 'postgres' && manualEdits,
     };
     password = '';
@@ -82,7 +112,11 @@
   <p class="muted">A direct connection. Your credentials stay in this app session.</p>
   <form onsubmit={submit} autocomplete="off">
     <label
-      >Database engine<select bind:value={engine} onchange={changeEngine} disabled={busy}>
+      >Database engine<select
+        bind:value={engine}
+        onchange={changeEngine}
+        disabled={busy || readingCa}
+      >
         <option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option
           value="redis">Redis</option
         >
@@ -133,12 +167,43 @@
       >
     </div>
     <label
-      >Transport security<select bind:value={tls}
-        ><option value="verifyFull">TLS · verify certificate and hostname</option><option
-          value="localOnly">Local only · unencrypted loopback IP</option
-        ></select
+      >Transport security<select bind:value={tls} disabled={busy || readingCa}
+        ><option value="verifyFull">TLS · verify certificate and hostname</option>
+        {#if engine === 'postgres'}<option value="require"
+            >TLS · encrypted, certificate not verified</option
+          >{/if}
+        <option value="localOnly">Local only · unencrypted loopback IP</option></select
       ></label
     >
+    {#if engine === 'postgres' && tls === 'require'}
+      <p class="muted small" role="note">
+        TLS is required, but the server's identity is not verified. Use only if you trust this
+        endpoint. No plaintext fallback.
+      </p>
+    {:else if tls === 'localOnly'}
+      <p class="muted small">
+        Use 127.0.0.1 or ::1 for a local database or trusted tunnel. Remote IP addresses require
+        TLS.
+      </p>
+    {/if}
+    {#if engine === 'postgres' && tls === 'verifyFull'}
+      <details>
+        <summary class="small">Custom CA certificate (optional)</summary>
+        <label
+          >CA certificate (.pem / .crt)<input
+            type="file"
+            accept=".pem,.crt"
+            onchange={readCa}
+            disabled={busy || readingCa}
+          /></label
+        >
+        <p class="muted small">
+          {caName
+            ? `${caName} · session only`
+            : 'For private CAs, choose the CA file from your database provider. Host must still match the server certificate.'}
+        </p>
+      </details>
+    {/if}
     {#if engine === 'postgres'}<label class="checkbox-label"
         ><input type="checkbox" bind:checked={manualEdits} />Allow manual cell edits</label
       >
@@ -158,7 +223,7 @@
       <span class="muted small"><LockKeyhole size={13} /> Not saved to disk</span><button
         class="primary-button"
         type="submit"
-        disabled={busy}
+        disabled={busy || readingCa}
         >{busy ? 'Checking access…' : 'Connect securely'}<ArrowRight size={16} /></button
       >
     </div>

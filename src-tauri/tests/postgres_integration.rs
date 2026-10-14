@@ -15,6 +15,7 @@ fn request() -> ConnectRequest {
         password: "local-reader-only".into(),
         schema: "public".into(),
         tls: TlsMode::LocalOnly,
+        root_ca_pem: String::new(),
         manual_edits: false,
     }
 }
@@ -311,7 +312,10 @@ async fn verified_tls_does_not_fall_back_to_plaintext() {
     let mut r = request();
     r.tls = TlsMode::VerifyFull;
     // This fixture does not provide TLS. The app must reject it, not downgrade.
-    assert_eq!(app.connect(r).await.unwrap_err().code, "CONNECTION_FAILED");
+    assert_eq!(
+        app.connect(r).await.unwrap_err().code,
+        "TLS_CONNECTION_FAILED"
+    );
 }
 
 fn editor_request() -> ConnectRequest {
