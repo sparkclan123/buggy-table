@@ -12,7 +12,7 @@ test('PostgreSQL TLS compatibility is explicit and does not leak into other engi
       invoke: async (command: string, payload: { request?: Record<string, unknown> }) => {
         if (command.startsWith('plugin:')) return 1;
         if (command === 'check_update') return { configured: false, currentVersion: '0.1.1' };
-        if (command === 'connect') {
+        if (command === 'connect_profile') {
           target.submittedTls = { tls: payload.request?.tls, ca: payload.request?.rootCaPem };
           throw { message: 'Authentication failed. Check the database role and password.' };
         }
@@ -79,13 +79,17 @@ for (const major of [15, 16, 17, 18, 19]) {
         invoke: async (command: string, payload: { request?: Record<string, unknown> }) => {
           if (command.startsWith('plugin:')) return 1;
           if (command === 'check_update') return { configured: false, currentVersion: '0.1.2' };
-          if (command === 'connect')
+          if (command === 'connect_profile')
             return {
-              ...payload.request,
-              id: 'version-fixture',
-              name: `PostgreSQL ${major} fixture`,
-              serverVersion: String(major * 10000),
-              tables: [],
+              profile: null,
+              warning: null,
+              connection: {
+                ...payload.request,
+                id: 'version-fixture',
+                name: `PostgreSQL ${major} fixture`,
+                serverVersion: String(major * 10000),
+                tables: [],
+              },
             };
           return null;
         },

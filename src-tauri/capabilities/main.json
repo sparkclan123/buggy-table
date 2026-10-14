@@ -20,6 +20,13 @@
     "allow-redis-command",
     "allow-check-update",
     "allow-install-update",
-    "core:window:allow-set-theme"
+    "core:window:allow-set-theme",
+    "allow-list-connections",
+    "allow-connect-profile",
+    "allow-reconnect-profile",
+    "allow-update-connection",
+    "allow-remove-connection",
+    "allow-list-schemas",
+    "allow-schema-tables"
   ]
 }

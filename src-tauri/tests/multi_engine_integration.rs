@@ -32,6 +32,7 @@ fn request(engine: Engine) -> ConnectRequest {
 }
 fn query(id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         sql: sql.into(),
@@ -40,6 +41,7 @@ fn query(id: &str, sql: &str) -> QueryRequest {
 }
 fn browse(id: &str) -> BrowseRequest {
     BrowseRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: "items".into(),
@@ -166,6 +168,7 @@ async fn mysql_rejects_mutation_indirection_and_write_accounts() {
     assert_eq!(app.connect(r).await.unwrap_err().code, "POLICY_DENIED");
     assert_eq!(
         app.save(SaveRequest {
+            schema: None,
             connection_id: info.id.clone(),
             request_id: Uuid::new_v4().to_string(),
             table: "items".into(),

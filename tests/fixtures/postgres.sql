@@ -86,3 +86,13 @@ DO $$ BEGIN
     EXECUTE 'GRANT SELECT ON public.virtual_items TO tablepor_reader, tablepor_editor';
   END IF;
 END $$;
+
+-- Same table names in different schemas catch wrong-schema reads and saves.
+CREATE SCHEMA audit;
+CREATE SCHEMA restricted;
+GRANT USAGE ON SCHEMA audit TO tablepor_reader, tablepor_editor;
+CREATE TABLE audit.edit_items (id bigint PRIMARY KEY, label text NOT NULL);
+INSERT INTO audit.edit_items VALUES (1, 'Audit only');
+GRANT SELECT ON audit.edit_items TO tablepor_reader, tablepor_editor;
+GRANT UPDATE(label) ON audit.edit_items TO tablepor_editor;
+CREATE TABLE restricted.edit_items (id bigint PRIMARY KEY, label text);

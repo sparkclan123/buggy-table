@@ -13,7 +13,7 @@
 - One Rust crate and plain modules; no speculative plugin host, dynamic loading or trait hierarchy.
 - `tokio-postgres` replaces the tentative SQLx choice for the first PostgreSQL adapter. Native cancellation and simple-query text streaming keep dynamic values lossless without a large decoder.
 - A dedicated connection per operation avoids pool state leaks. This costs connection/preflight latency and is a measured trade-off to revisit after session-reset and cancellation tests exist for pooling.
-- Session-only credentials rather than incomplete secret persistence. The Rust password holder zeroizes its owned buffer on drop, but driver/OS/JS copies and process memory are not claimed to be perfectly erased.
+- Password-free local bookmarks plus optional platform credential storage (Mac login Keychain / Windows Local persistence). The Rust password holder zeroizes its owned buffer on drop, but driver/OS/JS copies and process memory are not claimed to be perfectly erased.
 - 200 rows per browser page; raw SELECT results stop after 1,000 rows or 4 MiB. The UI receives one bounded result, not a complete streaming IPC protocol yet.
 - CodeMirror loads only when the SQL tab is opened.
 - Monitoring is manual refresh, not a background collector. No history is persisted.
@@ -57,9 +57,9 @@ Each table tab owns filter drafts/applied conditions, match mode, sort direction
 - DBA changes to functions, operators, privileges or schema can race metadata checks. The app cannot defend against a malicious database administrator or compromised device.
 - Row/byte caps bound retained results, not arbitrary server work or the driver's allocation of one oversized protocol message/field. Network-level frame limits and worker isolation remain hardening work. A single huge cell can exceed the UI/result budget before it is discarded.
 - Ordinary reads affect internal counters/caches and can acquire read locks. “Read-only” means no application data/schema mutation commands.
-- TLS defaults to system certificate trust and hostname checks. PostgreSQL can add a session-only CA PEM bundle or explicitly select `require` (encrypted, certificate/hostname not verified). Both TLS modes reject servers without TLS; there is no plaintext fallback. MySQL/Redis reject PostgreSQL-only TLS options at the backend. A local plaintext connection requires a literal loopback IP; `localhost` is intentionally insufficient.
+- TLS defaults to system certificate trust and hostname checks. PostgreSQL can add a CA PEM bundle (saved only with a remembered connection) or explicitly select `require` (encrypted, certificate/hostname not verified). Both TLS modes reject servers without TLS; there is no plaintext fallback. MySQL/Redis reject PostgreSQL-only TLS options at the backend. A local plaintext connection requires a literal loopback IP; `localhost` is intentionally insufficient.
 - No application telemetry/update/AI endpoints exist, but there is no OS-wide outbound firewall policy in this preview. Browser request tests do not certify all native/OS network traffic.
-- Credentials/history/results are not intentionally persisted by application code. OS swap, crash handling, backups, clipboard and malicious local processes are outside that claim.
+- SQL/history/results are not persisted. Connection metadata/tab identities use atomic local JSON writes; opt-in passwords use the OS credential store. OS swap, crash handling, backups, clipboard and malicious local processes are outside that claim.
 - Pagination is OFFSET-based and not a cross-page snapshot. Concurrent database changes can cause skipped/repeated rows. Primary-key ordering is used where available; tables without a primary key have no stable paging guarantee.
 - Index scan counters are cumulative, can reset and are not grounds for deleting an index. Activity visibility is limited by the role. No claim to capture every database query.
 
@@ -104,3 +104,12 @@ The result grid has neutral text and fixed 28 px rows. Column widths (72-800 px)
 See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for MySQL/Redis boundaries, dependency findings and residual limits. MySQL uses mysql_async with native TLS and prepared filter values; numeric/decimal values remain strings. Redis uses redis-rs with an 8 MiB wire-budget wrapper, explicit driver-task ownership and no automatic redirect/reconnect. MySQL normalizes its session SQL mode and requires direct read grants. These engines reject manual writes regardless of IPC flags.
 
 UI tests start a production preview on port 1420 (close any dev server on that port first). This tests the bundled lazy SQL editor without Vite dev dependency reloads. Failure traces are uploaded by CI.
+
+
+## Connection workspace ownership
+
+`connections.ts` owns one UI workspace per backend session/bookmark; `workspace.ts` keys tabs by JSON `[schema, table]`. Schema travels with every browse/query/index/save request. PostgreSQL rechecks role privileges and approved tables for that schema on each operation. Switching never mutates a backend session's credentials or disconnects another session.
+
+`profiles.rs` owns a versioned, bounded metadata format, atomic replacement and device-local vault adapters. `connection_commands.rs` keeps native credential I/O off the async executor and never returns a stored secret to JavaScript. Reconnect is explicit. UI layout writes serialize per bookmark. Settings restore table identities lazily; draft cells, filters, SQL text and results stay in memory only. Do not add them to `ProfileLayout`.
+
+The OS credential roundtrip test is opt-in because it writes/deletes a disposable credential: `cargo test --manifest-path src-tauri/Cargo.toml --lib local_credential_roundtrip -- --ignored`. Run against a normal unlocked login session. Windows CI additionally asserts Local persistence; there is no mock credential-store fallback in production.

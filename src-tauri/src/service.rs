@@ -212,7 +212,11 @@ impl Workbench {
         }
         let work = async {
             let db = profile.open().await?;
-            db.save(&profile.schema, &request).await
+            db.save(
+                request.schema.as_deref().unwrap_or(&profile.schema),
+                &request,
+            )
+            .await
         };
         // A lost response during COMMIT cannot prove rollback. Never retry a save
         // automatically; the UI requires a fresh read to reconcile this outcome.
@@ -250,12 +254,19 @@ impl Workbench {
         let work = async {
             match &operation {
                 Operation::Sql(r) => {
-                    db.run_validated(&r.sql, &profile.schema, r.explain, cancelled.clone())
-                        .await
+                    db.run_validated(
+                        &r.sql,
+                        r.schema.as_deref().unwrap_or(&profile.schema),
+                        r.explain,
+                        cancelled.clone(),
+                    )
+                    .await
                 }
                 Operation::Browse(r) => {
                     db.preflight().await?;
-                    let tables = db.tables(&profile.schema).await?;
+                    let tables = db
+                        .tables(r.schema.as_deref().unwrap_or(&profile.schema))
+                        .await?;
                     let table = tables.iter().find(|t| t.name == r.table)
                         .ok_or_else(|| AppError::policy("This table is no longer in the approved scope. Reconnect to refresh the schema."))?;
                     db.browse(table, r).await
@@ -281,6 +292,16 @@ impl Workbench {
         connection_id: &str,
         table_name: &str,
     ) -> AppResult<Vec<IndexInfo>> {
+        self.indexes_in_schema(connection_id, table_name, None)
+            .await
+    }
+
+    pub async fn indexes_in_schema(
+        &self,
+        connection_id: &str,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> AppResult<Vec<IndexInfo>> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
@@ -292,11 +313,48 @@ impl Workbench {
             async {
                 let db = profile.open().await?;
                 db.preflight().await?;
-                let tables = db.tables(&profile.schema).await?;
+                let schema = schema.unwrap_or(&profile.schema);
+                let tables = db.tables(schema).await?;
                 if !tables.iter().any(|t| t.name == table_name) {
                     return Err(AppError::policy("Table is outside the approved scope."));
                 }
-                db.indexes(&profile.schema, table_name).await
+                db.indexes(schema, table_name).await
+            },
+            cancelled,
+        )
+        .await
+    }
+
+    pub async fn schemas(&self, connection_id: &str) -> AppResult<Vec<String>> {
+        let (profile, _guard, cancelled) = self
+            .start_operation(connection_id, &Uuid::new_v4().to_string())
+            .await?;
+        let profile = profile.postgres()?;
+        bounded_metadata(
+            async {
+                let db = profile.open().await?;
+                db.preflight().await?;
+                db.schemas().await
+            },
+            cancelled,
+        )
+        .await
+    }
+
+    pub async fn schema_tables(
+        &self,
+        connection_id: &str,
+        schema: &str,
+    ) -> AppResult<Vec<TableInfo>> {
+        let (profile, _guard, cancelled) = self
+            .start_operation(connection_id, &Uuid::new_v4().to_string())
+            .await?;
+        let profile = profile.postgres()?;
+        bounded_metadata(
+            async {
+                let db = profile.open().await?;
+                db.preflight().await?;
+                db.tables(schema).await
             },
             cancelled,
         )

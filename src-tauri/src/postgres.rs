@@ -364,7 +364,29 @@ impl Database {
         Ok(version)
     }
 
+    pub async fn schemas(&self) -> AppResult<Vec<String>> {
+        let rows = self.client.query("SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE') ORDER BY nspname LIMIT 1001", &[]).await.map_err(query_error)?;
+        if rows.len() > 1000 {
+            return Err(AppError::new(
+                "SCOPE_TOO_LARGE",
+                "This database exposes more than 1000 schemas.",
+            ));
+        }
+        Ok(rows.into_iter().map(|r| r.get(0)).collect())
+    }
+
     pub async fn tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
+        if schema.is_empty() || schema.len() > 253 || schema.contains('\0') {
+            return Err(AppError::policy("Invalid schema name."));
+        }
+        let accessible: bool = self.client.query_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", &[&schema]).await.map_err(query_error)?.get(0);
+        if !accessible {
+            return Err(AppError::new(
+                "SCHEMA_UNAVAILABLE",
+                "Schema does not exist or this account has no USAGE permission.",
+            ));
+        }
+
         // Exclude views, foreign/partitioned/inherited parents, RLS policies and
         // custom types and virtual/unknown generated kinds; these can hide executable
         // dependencies behind a SELECT (virtual columns were added in PostgreSQL 18).

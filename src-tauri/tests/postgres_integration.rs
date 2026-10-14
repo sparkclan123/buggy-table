@@ -29,6 +29,7 @@ fn request() -> ConnectRequest {
 
 fn query(connection_id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
         sql: sql.into(),
@@ -38,6 +39,7 @@ fn query(connection_id: &str, sql: &str) -> QueryRequest {
 
 fn browse(connection_id: &str) -> BrowseRequest {
     BrowseRequest {
+        schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: "orders".into(),
@@ -345,6 +347,7 @@ fn editor_request() -> ConnectRequest {
 }
 async fn editable_rows(app: &Workbench, id: &str, table: &str) -> QueryResult {
     app.browse(BrowseRequest {
+        schema: None,
         table: table.into(),
         ..browse(id)
     })
@@ -364,6 +367,7 @@ fn edit(result: &QueryResult, index: usize, column: &str, value: Option<&str>) -
 }
 fn save(id: &str, table: &str, rows: Vec<RowChange>) -> SaveRequest {
     SaveRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: table.into(),
@@ -782,4 +786,88 @@ async fn generated_and_identity_columns_are_not_editable() {
         request.table = "virtual_items".into();
         assert!(app.browse(request).await.is_err());
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
+    let app = Workbench::default();
+    let first = app.connect(editor_request()).await.unwrap();
+    let second = app.connect(request()).await.unwrap();
+    let schemas = app.schemas(&first.id).await.unwrap();
+    assert!(schemas.contains(&"public".into()) && schemas.contains(&"audit".into()));
+    assert!(!schemas.contains(&"restricted".into()));
+    assert!(app.schema_tables(&first.id, "restricted").await.is_err());
+    assert!(
+        app.schema_tables(&first.id, "audit'; DROP SCHEMA public; --")
+            .await
+            .is_err()
+    );
+    let columns = app.schema_tables(&first.id, "audit").await.unwrap();
+    assert_eq!(columns[0].columns.len(), 2);
+    let mut browse_audit = browse(&first.id);
+    browse_audit.schema = Some("audit".into());
+    browse_audit.table = "edit_items".into();
+    let data = app.browse(browse_audit).await.unwrap();
+    assert_eq!(data.rows[0][1].as_deref(), Some("Audit only"));
+    let mut update = SaveRequest {
+        connection_id: first.id.clone(),
+        request_id: Uuid::new_v4().to_string(),
+        schema: Some("audit".into()),
+        table: "edit_items".into(),
+        rows: vec![RowChange {
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("Audit only".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("Audit edited".into()))].into(),
+        }],
+    };
+    app.save(update).await.unwrap();
+    let mut q = query(
+        &second.id,
+        "SELECT label FROM audit.edit_items WHERE id = 1",
+    );
+    q.schema = Some("audit".into());
+    assert_eq!(
+        app.query(q).await.unwrap().rows[0][0].as_deref(),
+        Some("Audit edited")
+    );
+    let public = app
+        .query(query(
+            &second.id,
+            "SELECT label FROM public.edit_items WHERE id = 1",
+        ))
+        .await
+        .unwrap();
+    assert_ne!(public.rows[0][0].as_deref(), Some("Audit edited"));
+    let mut forbidden = query(&second.id, "SELECT * FROM public.edit_items");
+    forbidden.schema = Some("audit".into());
+    assert!(app.query(forbidden).await.is_err());
+    assert!(
+        !app.indexes_in_schema(&second.id, "edit_items", Some("audit"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    update = SaveRequest {
+        connection_id: first.id.clone(),
+        request_id: Uuid::new_v4().to_string(),
+        schema: Some("audit".into()),
+        table: "edit_items".into(),
+        rows: vec![RowChange {
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("Audit edited".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("Audit only".into()))].into(),
+        }],
+    };
+    app.save(update).await.unwrap();
+    app.disconnect(&first.id).await.unwrap();
+    assert!(app.query(query(&first.id, "SELECT 1")).await.is_err());
+    assert!(app.query(query(&second.id, "SELECT 1")).await.is_ok());
+    app.disconnect(&second.id).await.unwrap();
 }

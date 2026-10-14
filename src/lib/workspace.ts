@@ -1,11 +1,14 @@
 import type { Filter, FilterMatch, IndexInfo, QueryResult, RowChange, TableInfo } from './types';
 import { quoteIdentifier } from './api';
 
+export const tableKey = (schema: string, table: string) => JSON.stringify([schema, table]);
+
 export type TableView = 'data' | 'structure' | 'indexes' | 'sql';
 export type CellEdits = Record<number, Record<string, string | null>>;
 export function createWorkspace(table?: TableInfo, engine = 'postgres') {
   return {
-    id: table ? `${table.schema}.${table.name}` : 'empty',
+    id: table ? tableKey(table.schema, table.name) : 'empty',
+    schema: table?.schema ?? '',
     selectedName: table?.name ?? '',
     tab: (table ? 'data' : 'sql') as TableView,
     showFilter: false,
@@ -26,6 +29,7 @@ export function createWorkspace(table?: TableInfo, engine = 'postgres') {
     plan: null as string | null,
     edits: {} as CellEdits,
     scrollTop: 0,
+    lastAccess: Date.now(),
     uncertain: false,
     notice: '',
   };

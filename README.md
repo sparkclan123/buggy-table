@@ -31,7 +31,10 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 
 เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
 
-**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, saved connections/keychain, SSH, query history, joins/CTEs/functions/casts, views/RLS/custom types และการรับรองใช้งาน production
+- จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
+- สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
+
+**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, SSH, query history, joins/CTEs/functions/casts, views/RLS/custom types และการรับรองใช้งาน production
 
 ## เริ่มรัน
 

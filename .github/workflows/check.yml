@@ -49,6 +49,8 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:rust
       - run: pnpm lint:rust
+      - if: runner.os == 'Windows'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib local_credential_roundtrip -- --ignored
       - run: pnpm tauri build --debug --no-bundle
 
   integration:

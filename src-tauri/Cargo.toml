@@ -1,6 +1,6 @@
 [package]
 name = "buggy-table"
-version = "0.1.2"
+version = "0.1.3"
 description = "A local database workspace with guarded queries and explicit table saves"
 edition = "2024"
 rust-version = "1.90"
@@ -17,7 +17,7 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-updater"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-updater", "dep:keyring-core", "dep:apple-native-keyring-store", "dep:windows-native-keyring-store"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [], optional = true }
@@ -38,6 +38,15 @@ uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
 mysql_async = { version = "0.37.1", default-features = false, features = ["minimal-rust", "native-tls-tls"] }
 redis = { version = "1.7.1", default-features = false, features = ["tokio-native-tls-comp"] }
+
+keyring-core = { version = "1.0.1", optional = true }
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { version = "1.1.0", default-features = false, optional = true }
 
 [dev-dependencies]
 rcgen = "0.14.10"

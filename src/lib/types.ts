@@ -56,6 +56,7 @@ export interface Filter {
   value: string;
 }
 export interface BrowseRequest {
+  schema?: string;
   connectionId: string;
   requestId: string;
   table: string;
@@ -95,6 +96,7 @@ export interface RowChange {
   changes: Record<string, string | null>;
 }
 export interface SaveRequest {
+  schema?: string;
   connectionId: string;
   requestId: string;
   table: string;
@@ -107,4 +109,23 @@ export interface SaveResult {
 export interface RedisResult {
   value: unknown;
   elapsedMs: number;
+}
+
+export interface ProfileLayout {
+  selectedSchema: string;
+  tabs: { schema: string; table: string }[];
+  activeTab: string;
+}
+export interface SavedConnection extends Omit<ConnectRequest, 'password'> {
+  id: string;
+  group: string;
+  pinned: boolean;
+  lastUsed: number;
+  hasPassword: boolean;
+  layout: ProfileLayout;
+}
+export interface ConnectedProfile {
+  connection: ConnectionInfo;
+  profile: SavedConnection | null;
+  warning: string | null;
 }
