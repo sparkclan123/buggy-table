@@ -96,3 +96,14 @@ The PostgreSQL schema selector is now a native dropdown at the bottom of the sid
 GitHub Check run 38496464089 passed every job: PostgreSQL 15–18, integration/UI, macOS and Windows. Windows Credential Manager roundtrip succeeded and asserted Local persistence. Installer run 38496464150 built Mac ARM64, Mac Intel and Windows x64 from b46a10861a4225ddf474daa98c9df99e30f9124e, tagged preview/v0.1.4 and merged into main through PR #2. Both downloaded DMGs pass checksum verification and contain version 0.1.4 with the expected arm64/x86_64 architecture. Windows installer build succeeds; interactive Windows installation has not been tested on this Mac.
 
 Public distribution: https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4. The release includes SHA-256 checksums and build provenance. It remains an unsigned preview with in-app updates disabled; no Apple/Azure signing credentials were supplied.
+
+## macOS packaging fix 0.1.5 — 2026-10-14
+
+- Reproduced 0.1.4 DMG failures: ARM `codesign --verify --deep --strict` reported `code has no resources but signature indicates they must be present`; Intel reported `code object is not signed at all`. DMG CRC itself passed. The earlier installer checks did not cover bundle signatures.
+- 0.1.5 uses Tauri ad-hoc bundle signing; native ARM and cross-compiled Intel release builds completed locally. Both build outputs and mounted DMG apps passed strict/deep codesign validation with sealed resources, correct bundle ID/version and expected architecture.
+- Regression checks: the new verifier rejects both old 0.1.4 apps; rejects a temporary copy with a modified Info.plist; signed-production mode rejects the ad-hoc preview.
+- Native ARM fresh launch displayed v0.1.5 and existing disconnected profiles. No production DB connection was made. Intel interactive launch is untested (this ARM host has no Rosetta).
+- `pnpm release:check`, frontend type check/build, `pnpm test` (3 tests), format checks, `bash -n`, actionlint and `git diff --check` passed. Database/UI integration suites were not rerun for this packaging-only change.
+- Source commit `cf7d1bc206d3dfa97e6b7e4a30c55d2b9c0981bd`, tag `preview/v0.1.5`. GitHub Check run `38506595822` was blocked before execution by account payment/spending limits; it is not a passing CI run.
+- Gatekeeper still rejects ad-hoc as untrusted: no Developer ID identity or notarization credentials are configured. This release does not claim automatic acceptance on other Macs. The standard per-app Open Anyway flow has not been tested on a clean second Mac. Managed-device policy may disallow it.
+- Staged ARM DMG SHA-256: `e9006414e0c21e2572e4979ef688b5790ad8d12d07b88e9b7e99a0aeaf438976`; Intel: `cac0fe69b4a8d7aa7dafaedf513438f29adc96d502caa8085d2a916648469809`. All four draft asset digests matched local files before publishing. Windows remains on 0.1.4.
