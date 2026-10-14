@@ -1,11 +1,15 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AppError,
+  SavedConnection,
+  ConnectedProfile,
+  ProfileLayout,
   RedisResult,
   SaveRequest,
   SaveResult,
   BrowseRequest,
   ConnectRequest,
+  TableInfo,
   ConnectionInfo,
   IndexInfo,
   Overview,
@@ -25,18 +29,34 @@ async function call<T>(command: string, args: Record<string, unknown>): Promise<
 }
 
 export const api = {
+  connections: () => call<SavedConnection[]>('list_connections', {}),
+  connectProfile: (
+    request: ConnectRequest,
+    savedId: string | null,
+    group: string,
+    remember: boolean,
+    savePassword: boolean,
+  ) =>
+    call<ConnectedProfile>('connect_profile', { request, savedId, group, remember, savePassword }),
+  reconnect: (id: string) => call<ConnectedProfile>('reconnect_profile', { id }),
+  updateConnection: (id: string, layout: ProfileLayout, pinned: boolean, group: string) =>
+    call<void>('update_connection', { id, layout, pinned, group }),
+  removeConnection: (id: string) => call<void>('remove_connection', { id }),
+  schemas: (connectionId: string) => call<string[]>('list_schemas', { connectionId }),
+  schemaTables: (connectionId: string, schema: string) =>
+    call<TableInfo[]>('schema_tables', { connectionId, schema }),
   redis: (connectionId: string, requestId: string, args: string[]) =>
     call<RedisResult>('redis_command', { request: { connectionId, requestId, args } }),
   save: (request: SaveRequest) => call<SaveResult>('save_table_changes', { request }),
   connect: (request: ConnectRequest) => call<ConnectionInfo>('connect', { request }),
   disconnect: (connectionId: string) => call<void>('disconnect', { connectionId }),
-  query: (connectionId: string, requestId: string, sql: string, explain = false) =>
-    call<QueryResult>('run_query', { request: { connectionId, requestId, sql, explain } }),
+  query: (connectionId: string, requestId: string, sql: string, explain = false, schema?: string) =>
+    call<QueryResult>('run_query', { request: { connectionId, requestId, sql, explain, schema } }),
   cancel: (connectionId: string, requestId: string) =>
     call<void>('cancel_query', { connectionId, requestId }),
   browse: (request: BrowseRequest) => call<QueryResult>('browse_table', { request }),
-  indexes: (connectionId: string, table: string) =>
-    call<IndexInfo[]>('inspect_table', { connectionId, table }),
+  indexes: (connectionId: string, table: string, schema?: string) =>
+    call<IndexInfo[]>('inspect_table', { connectionId, table, schema }),
   overview: (connectionId: string) => call<Overview>('get_overview', { connectionId }),
 };
 

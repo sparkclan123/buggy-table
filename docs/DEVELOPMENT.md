@@ -13,7 +13,7 @@
 - One Rust crate and plain modules; no speculative plugin host, dynamic loading or trait hierarchy.
 - `tokio-postgres` replaces the tentative SQLx choice for the first PostgreSQL adapter. Native cancellation and simple-query text streaming keep dynamic values lossless without a large decoder.
 - A dedicated connection per operation avoids pool state leaks. This costs connection/preflight latency and is a measured trade-off to revisit after session-reset and cancellation tests exist for pooling.
-- Session-only credentials rather than incomplete secret persistence. The Rust password holder zeroizes its owned buffer on drop, but driver/OS/JS copies and process memory are not claimed to be perfectly erased.
+- Password-free local bookmarks plus optional platform credential storage (Mac login Keychain / Windows Local persistence). The Rust password holder zeroizes its owned buffer on drop, but driver/OS/JS copies and process memory are not claimed to be perfectly erased.
 - 200 rows per browser page; raw SELECT results stop after 1,000 rows or 4 MiB. The UI receives one bounded result, not a complete streaming IPC protocol yet.
 - CodeMirror loads only when the SQL tab is opened.
 - Monitoring is manual refresh, not a background collector. No history is persisted.
@@ -21,7 +21,9 @@
 
 ## PostgreSQL security boundary
 
-Only PostgreSQL 17 is enabled in this first build because it is the version exercised by the integration fixture. Expand the version gate only after running the same security/cancellation suite on the added version.
+PostgreSQL 15–18 are covered by the same integration/security/cancellation suite in the `postgres-compatibility` CI matrix. PostgreSQL 15 is the minimum; there is no upper version gate. Newer majors can attempt a connection and receive a visible compatibility notice, not a guarantee of support. Catalog validation, strict-reader checks, SQL policy and transaction restrictions are still enforced on every version. Tables with virtual or unknown generated-column kinds are excluded from the approved scope; stored generated and identity columns remain non-editable.
+
+To validate a future stable major, add it to `.github/workflows/check.yml`, run the suite below, inspect catalog/protocol changes and then update the tested-version notice and documentation. Do not mark a version tested based only on a successful connection.
 
 Queries use an isolated connection, `BEGIN READ ONLY`, fixed `search_path=pg_catalog`, `standard_conforming_strings=on`, 10-second statement timeout, 1.5-second lock timeout and 10-second idle-in-transaction timeout. Application deadlines cover connection/preflight/execution and cancellation closes the dedicated connection. A cancel request is not presented as proof the server has already finished stopping work.
 
@@ -55,9 +57,9 @@ Each table tab owns filter drafts/applied conditions, match mode, sort direction
 - DBA changes to functions, operators, privileges or schema can race metadata checks. The app cannot defend against a malicious database administrator or compromised device.
 - Row/byte caps bound retained results, not arbitrary server work or the driver's allocation of one oversized protocol message/field. Network-level frame limits and worker isolation remain hardening work. A single huge cell can exceed the UI/result budget before it is discarded.
 - Ordinary reads affect internal counters/caches and can acquire read locks. “Read-only” means no application data/schema mutation commands.
-- TLS uses system certificate trust and hostname checks. No skip-verification switch or automatic plaintext fallback. A local plaintext connection requires a literal loopback IP; `localhost` is intentionally insufficient.
+- TLS defaults to system certificate trust and hostname checks. PostgreSQL can add a CA PEM bundle (saved only with a remembered connection) or explicitly select `require` (encrypted, certificate/hostname not verified). Both TLS modes reject servers without TLS; there is no plaintext fallback. MySQL/Redis reject PostgreSQL-only TLS options at the backend. A local plaintext connection requires a literal loopback IP; `localhost` is intentionally insufficient.
 - No application telemetry/update/AI endpoints exist, but there is no OS-wide outbound firewall policy in this preview. Browser request tests do not certify all native/OS network traffic.
-- Credentials/history/results are not intentionally persisted by application code. OS swap, crash handling, backups, clipboard and malicious local processes are outside that claim.
+- SQL/history/results are not persisted. Connection metadata/tab identities use atomic local JSON writes; opt-in passwords use the OS credential store. OS swap, crash handling, backups, clipboard and malicious local processes are outside that claim.
 - Pagination is OFFSET-based and not a cross-page snapshot. Concurrent database changes can cause skipped/repeated rows. Primary-key ordering is used where available; tables without a primary key have no stable paging guarantee.
 - Index scan counters are cumulative, can reset and are not grounds for deleting an index. Activity visibility is limited by the role. No claim to capture every database query.
 
@@ -76,6 +78,19 @@ Sessions now use an explicit Postgres/Mysql/Redis enum. Shared job limits and ca
 
 `compose.yaml` binds PostgreSQL/MySQL/Redis only to loopback ports 15432/13306/16379. PostgreSQL/MySQL use tmpfs; Redis persistence is disabled. All data and accounts are disposable fixtures. The committed credentials are fixture credentials, not deployment secrets. Integration tests deliberately grant/revoke permissions and acquire locks on these fixture tables. They must never be pointed at another database.
 
+Run a specific PostgreSQL version from the repository root (requires Docker and Rust):
+
+```sh
+export BUGGY_TEST_POSTGRES_VERSION=18
+export BUGGY_TEST_POSTGRES_PORT=25432
+docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml up -d --wait
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test postgres_integration -- --include-ignored --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib encrypted_connection_authenticates_and_queries_through_tls -- --ignored
+docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml down
+```
+
+Use 15, 16, 17 or 18. Bring the fixture down before changing versions. This separate Compose project does not replace the default development database. The test verifies the actual server major matches the requested matrix entry. `PGDATA` is explicit for compatibility with the PostgreSQL 18 image layout. New fixture tables require recreating an existing disposable test database, never applying the fixture to a real database.
+
 Read-only and mutation tests operate at two levels: application policy and the server role directly without the application. Cancellation is tested with a blocked query, and precision tests cover bigint beyond JavaScript's integer range, exact decimal strings and NULL.
 
 For native release testing, open the packaged app, connect to the fixture, browse, filter, execute SELECT, inspect indexes, open the overview and disconnect. Confirm the sample banner disappears when connected and the UI never falls back to fictional data on errors.
@@ -89,3 +104,12 @@ The result grid has neutral text and fixed 28 px rows. Column widths (72-800 px)
 See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for MySQL/Redis boundaries, dependency findings and residual limits. MySQL uses mysql_async with native TLS and prepared filter values; numeric/decimal values remain strings. Redis uses redis-rs with an 8 MiB wire-budget wrapper, explicit driver-task ownership and no automatic redirect/reconnect. MySQL normalizes its session SQL mode and requires direct read grants. These engines reject manual writes regardless of IPC flags.
 
 UI tests start a production preview on port 1420 (close any dev server on that port first). This tests the bundled lazy SQL editor without Vite dev dependency reloads. Failure traces are uploaded by CI.
+
+
+## Connection workspace ownership
+
+`connections.ts` owns one UI workspace per backend session/bookmark; `workspace.ts` keys tabs by JSON `[schema, table]`. Schema travels with every browse/query/index/save request. PostgreSQL rechecks role privileges and approved tables for that schema on each operation. Switching never mutates a backend session's credentials or disconnects another session.
+
+`profiles.rs` owns a versioned, bounded metadata format, atomic replacement and device-local vault adapters. `connection_commands.rs` keeps native credential I/O off the async executor and never returns a stored secret to JavaScript. Reconnect is explicit. UI layout writes serialize per bookmark. Settings restore table identities lazily; draft cells, filters, SQL text and results stay in memory only. Do not add them to `ProfileLayout`.
+
+The OS credential roundtrip test is opt-in because it writes/deletes a disposable credential: `cargo test --manifest-path src-tauri/Cargo.toml --lib local_credential_roundtrip -- --ignored`. Run against a normal unlocked login session. Windows CI additionally asserts Local persistence; there is no mock credential-store fallback in production.

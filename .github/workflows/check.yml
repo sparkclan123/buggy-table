@@ -9,6 +9,26 @@ permissions:
   contents: read
 
 jobs:
+  postgres-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16', '17', '18']
+    env:
+      BUGGY_TEST_POSTGRES_VERSION: ${{ matrix.postgres }}
+      BUGGY_TEST_POSTGRES_PORT: '25432'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml up -d --wait
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test postgres_integration -- --include-ignored --test-threads=1
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib encrypted_connection_authenticates_and_queries_through_tls -- --ignored
+      - if: failure()
+        run: docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml logs
+      - if: always()
+        run: docker compose -p buggy-pg-compat -f tests/compose.postgres-compat.yml down
+
   desktop:
     strategy:
       fail-fast: false
@@ -29,6 +49,8 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:rust
       - run: pnpm lint:rust
+      - if: runner.os == 'Windows'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib local_credential_roundtrip -- --ignored
       - run: pnpm tauri build --debug --no-bundle
 
   integration:

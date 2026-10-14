@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-schema-tables"
+description = "Enables the schema_tables command without any pre-configured scope."
+commands.allow = ["schema_tables"]
+
+[[permission]]
+identifier = "deny-schema-tables"
+description = "Denies the schema_tables command without any pre-configured scope."
+commands.deny = ["schema_tables"]

@@ -303,20 +303,24 @@ test('Redis UI scans, inspects TTL, displays values as text, and refreshes witho
       transformCallback: () => 1,
       invoke: async (cmd: string, payload: { request?: Record<string, unknown> }) => {
         if (cmd.startsWith('plugin:')) return 1;
-        if (cmd === 'connect')
+        if (cmd === 'connect_profile')
           return {
-            id: 'redis-fixture',
-            engine: 'redis',
-            name: 'Redis UI fixture',
-            host: '127.0.0.1',
-            port: 16379,
-            database: '0',
-            schema: '0',
-            username: 'reader',
-            tls: 'localOnly',
-            manualEdits: false,
-            serverVersion: 'Redis',
-            tables: [],
+            profile: null,
+            warning: null,
+            connection: {
+              id: 'redis-fixture',
+              engine: 'redis',
+              name: 'Redis UI fixture',
+              host: '127.0.0.1',
+              port: 16379,
+              database: '0',
+              schema: '0',
+              username: 'reader',
+              tls: 'localOnly',
+              manualEdits: false,
+              serverVersion: 'Redis',
+              tables: [],
+            },
           };
         if (cmd === 'redis_command') {
           const args = payload.request?.args as string[];

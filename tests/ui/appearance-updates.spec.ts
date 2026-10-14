@@ -16,6 +16,7 @@ async function updaterStub(
         payload: { fetch?: boolean; progress?: { onmessage: (value: unknown) => void } },
       ) => {
         if (command.startsWith('plugin:')) return 1;
+        if (command === 'list_connections') return [];
         (target.updateCalls as unknown[]).push({ command, fetch: payload.fetch });
         if (command === 'check_update') {
           if (options.error && payload.fetch)

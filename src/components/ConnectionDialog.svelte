@@ -1,39 +1,82 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { Database, LockKeyhole, X, ArrowRight, ShieldCheck } from '@lucide/svelte';
-  import type { ConnectRequest, ConnectionInfo, TlsMode, Engine } from '../lib/types';
+  import type {
+    ConnectRequest,
+    ConnectedProfile,
+    SavedConnection,
+    TlsMode,
+    Engine,
+  } from '../lib/types';
   import { api, errorMessage } from '../lib/api';
   let {
     onconnected,
     onclose,
-  }: { onconnected: (connection: ConnectionInfo) => void; onclose: () => void } = $props();
-  let engine = $state<Engine>('postgres');
+    initial = null,
+  }: {
+    onconnected: (result: ConnectedProfile) => void;
+    onclose: () => void;
+    initial?: SavedConnection | null;
+  } = $props();
+  let engine = $state<Engine>(untrack(() => initial?.engine ?? 'postgres'));
+  let group = $state(untrack(() => initial?.group ?? ''));
+  let remember = $state(true);
+  let savePassword = $state(untrack(() => initial?.hasPassword ?? false));
   function changeEngine() {
     port = engine === 'postgres' ? 5432 : engine === 'mysql' ? 3306 : 6379;
     name = `Local ${engine === 'postgres' ? 'PostgreSQL' : engine === 'mysql' ? 'MySQL' : 'Redis'}`;
     database = engine === 'redis' ? '0' : '';
     schema = engine === 'postgres' ? 'public' : '';
     manualEdits = engine === 'postgres';
+    if (tls === 'require') tls = 'verifyFull';
+    rootCaPem = '';
+    caName = '';
     password = '';
     error = '';
   }
-  let name = $state('Local PostgreSQL');
-  let host = $state('127.0.0.1');
-  let port = $state(5432);
-  let database = $state('');
-  let username = $state('');
+  let name = $state(untrack(() => initial?.name ?? 'Local PostgreSQL'));
+  let host = $state(untrack(() => initial?.host ?? '127.0.0.1'));
+  let port = $state(untrack(() => initial?.port ?? 5432));
+  let database = $state(untrack(() => initial?.database ?? ''));
+  let username = $state(untrack(() => initial?.username ?? ''));
   let password = $state('');
-  let schema = $state('public');
-  let tls = $state<TlsMode>('verifyFull');
-  let manualEdits = $state(true);
+  let schema = $state(untrack(() => initial?.schema ?? 'public'));
+  let tls = $state<TlsMode>(untrack(() => initial?.tls ?? 'verifyFull'));
+  let rootCaPem = $state(untrack(() => initial?.rootCaPem ?? ''));
+  let caName = $state('');
+  let readingCa = $state(false);
+  let manualEdits = $state(untrack(() => initial?.manualEdits ?? true));
   let busy = $state(false);
   let error = $state('');
   let dialog: HTMLDialogElement;
   onMount(() => dialog.showModal());
 
+  async function readCa(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    rootCaPem = '';
+    caName = '';
+    error = '';
+    if (!file) return;
+    readingCa = true;
+    try {
+      if (file.size > 64 * 1024) throw new Error('CA files must be at most 64 KiB.');
+      const pem = await file.text();
+      if (!pem.trim().startsWith('-----BEGIN CERTIFICATE-----') || pem.includes('PRIVATE KEY'))
+        throw new Error('Choose a PEM CA certificate, not a private key.');
+      rootCaPem = pem;
+      caName = file.name;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not read the CA certificate file.';
+      input.value = '';
+    } finally {
+      readingCa = false;
+    }
+  }
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || readingCa) return;
     busy = true;
     error = '';
     const request: ConnectRequest = {
@@ -46,11 +89,20 @@
       password,
       schema: engine === 'postgres' ? schema : database,
       tls,
+      rootCaPem: engine === 'postgres' && tls === 'verifyFull' ? rootCaPem : '',
       manualEdits: engine === 'postgres' && manualEdits,
     };
     password = '';
     try {
-      onconnected(await api.connect(request));
+      onconnected(
+        await api.connectProfile(
+          request,
+          initial?.id ?? null,
+          group,
+          remember,
+          remember && savePassword,
+        ),
+      );
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -78,11 +130,17 @@
       disabled={busy}><X size={20} /></button
     >
   </div>
-  <h2 id="connection-title">Connect your database</h2>
-  <p class="muted">A direct connection. Your credentials stay in this app session.</p>
+  <h2 id="connection-title">{initial ? 'Reconnect database' : 'Connect your database'}</h2>
+  <p class="muted">
+    Direct connection. Passwords are session-only unless you choose system password storage.
+  </p>
   <form onsubmit={submit} autocomplete="off">
     <label
-      >Database engine<select bind:value={engine} onchange={changeEngine} disabled={busy}>
+      >Database engine<select
+        bind:value={engine}
+        onchange={changeEngine}
+        disabled={busy || readingCa}
+      >
         <option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option
           value="redis">Redis</option
         >
@@ -94,6 +152,13 @@
         required
         maxlength="253"
         placeholder="My development database"
+      /></label
+    >
+    <label
+      >Group (optional)<input
+        bind:value={group}
+        maxlength="100"
+        placeholder="Project / environment"
       /></label
     >
     <div class="form-row host-row">
@@ -133,12 +198,43 @@
       >
     </div>
     <label
-      >Transport security<select bind:value={tls}
-        ><option value="verifyFull">TLS · verify certificate and hostname</option><option
-          value="localOnly">Local only · unencrypted loopback IP</option
-        ></select
+      >Transport security<select bind:value={tls} disabled={busy || readingCa}
+        ><option value="verifyFull">TLS · verify certificate and hostname</option>
+        {#if engine === 'postgres'}<option value="require"
+            >TLS · encrypted, certificate not verified</option
+          >{/if}
+        <option value="localOnly">Local only · unencrypted loopback IP</option></select
       ></label
     >
+    {#if engine === 'postgres' && tls === 'require'}
+      <p class="muted small" role="note">
+        TLS is required, but the server's identity is not verified. Use only if you trust this
+        endpoint. No plaintext fallback.
+      </p>
+    {:else if tls === 'localOnly'}
+      <p class="muted small">
+        Use 127.0.0.1 or ::1 for a local database or trusted tunnel. Remote IP addresses require
+        TLS.
+      </p>
+    {/if}
+    {#if engine === 'postgres' && tls === 'verifyFull'}
+      <details>
+        <summary class="small">Custom CA certificate (optional)</summary>
+        <label
+          >CA certificate (.pem / .crt)<input
+            type="file"
+            accept=".pem,.crt"
+            onchange={readCa}
+            disabled={busy || readingCa}
+          /></label
+        >
+        <p class="muted small">
+          {caName
+            ? `${caName} · ${remember ? 'saved with connection' : 'session only'}`
+            : 'For private CAs, choose the CA file from your database provider. Host must still match the server certificate.'}
+        </p>
+      </details>
+    {/if}
     {#if engine === 'postgres'}<label class="checkbox-label"
         ><input type="checkbox" bind:checked={manualEdits} />Allow manual cell edits</label
       >
@@ -154,11 +250,17 @@
       >
     </div>
     {#if error}<div class="error-banner" role="alert">{error}</div>{/if}
+    <label class="checkbox-label"
+      ><input type="checkbox" bind:checked={remember} disabled={!!initial} />Remember connection on
+      this device</label
+    >
+    {#if remember}<label class="checkbox-label"
+        ><input type="checkbox" bind:checked={savePassword} />Save password in system password store</label
+      >{/if}
     <div class="dialog-footer">
-      <span class="muted small"><LockKeyhole size={13} /> Not saved to disk</span><button
-        class="primary-button"
-        type="submit"
-        disabled={busy}
+      <span class="muted small"
+        ><LockKeyhole size={13} /> {remember ? 'Settings saved locally' : 'Session only'}</span
+      ><button class="primary-button" type="submit" disabled={busy || readingCa}
         >{busy ? 'Checking access…' : 'Connect securely'}<ArrowRight size={16} /></button
       >
     </div>

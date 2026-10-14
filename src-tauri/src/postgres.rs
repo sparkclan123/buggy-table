@@ -1,11 +1,13 @@
 //! PostgreSQL transport and fixed catalog queries. No UI code or generic shell access.
 use std::{
+    error::Error as _,
+    io::ErrorKind,
     net::IpAddr,
     time::{Duration, Instant},
 };
 
 use futures_util::{TryStreamExt, pin_mut};
-use native_tls::TlsConnector;
+use native_tls::{Certificate, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
 use tokio::{sync::watch, task::JoinHandle, time::timeout};
 use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage, config::SslMode};
@@ -25,12 +27,20 @@ pub struct Profile {
     password: Zeroizing<String>,
     pub schema: String,
     tls: TlsMode,
+    root_ca: Vec<Certificate>,
     pub manual_edits: bool,
 }
 
 impl Profile {
     pub fn new(request: ConnectRequest) -> AppResult<Self> {
         let password = Zeroizing::new(request.password);
+        if request.tls != TlsMode::VerifyFull && !request.root_ca_pem.is_empty() {
+            return Err(AppError::new(
+                "INVALID_CA",
+                "A CA certificate requires verified TLS mode.",
+            ));
+        }
+        let root_ca = parse_root_ca(&request.root_ca_pem)?;
         for field in [
             &request.name,
             &request.host,
@@ -77,6 +87,7 @@ impl Profile {
             password,
             schema: request.schema,
             tls: request.tls,
+            root_ca,
             manual_edits: request.manual_edits,
         })
     }
@@ -110,7 +121,7 @@ impl Profile {
                 let (client, connection) = timeout(Duration::from_secs(6), config.connect(NoTls))
                     .await
                     .map_err(|_| deadline())?
-                    .map_err(connection_error)?;
+                    .map_err(|error| connection_error(error, self.tls))?;
                 (
                     client,
                     tokio::spawn(async move {
@@ -118,13 +129,18 @@ impl Profile {
                     }),
                 )
             }
-            TlsMode::VerifyFull => {
+            TlsMode::VerifyFull | TlsMode::Require => {
                 config.ssl_mode(SslMode::Require);
-                let (client, connection) =
-                    timeout(Duration::from_secs(6), config.connect(tls_connector()?))
-                        .await
-                        .map_err(|_| deadline())?
-                        .map_err(connection_error)?;
+                let (client, connection) = timeout(
+                    Duration::from_secs(6),
+                    config.connect(MakeTlsConnector::new(tls_connector(
+                        self.tls,
+                        &self.root_ca,
+                    )?)),
+                )
+                .await
+                .map_err(|_| deadline())?
+                .map_err(|error| connection_error(error, self.tls))?;
                 (
                     client,
                     tokio::spawn(async move {
@@ -137,6 +153,7 @@ impl Profile {
             client,
             task,
             tls: self.tls,
+            root_ca: self.root_ca.clone(),
             manual_edits: self.manual_edits,
         };
         db.client
@@ -151,6 +168,7 @@ pub struct Database {
     pub(crate) client: Client,
     task: JoinHandle<()>,
     tls: TlsMode,
+    root_ca: Vec<Certificate>,
     pub manual_edits: bool,
 }
 
@@ -161,17 +179,52 @@ impl Drop for Database {
     }
 }
 
-fn tls_connector() -> AppResult<MakeTlsConnector> {
-    let tls = TlsConnector::builder()
-        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-        .build()
-        .map_err(|_| {
-            AppError::new(
-                "TLS_ERROR",
-                "Unable to initialize the system TLS certificate verifier.",
-            )
-        })?;
-    Ok(MakeTlsConnector::new(tls))
+fn parse_root_ca(pem: &str) -> AppResult<Vec<Certificate>> {
+    let invalid = || {
+        AppError::new(
+            "INVALID_CA",
+            "Choose a PEM CA certificate file, up to 64 KiB and 16 certificates. Private keys are not accepted.",
+        )
+    };
+    if pem.len() > 64 * 1024 {
+        return Err(invalid());
+    }
+    let mut certificates = Vec::new();
+    let mut remaining = pem.trim();
+    while !remaining.is_empty() {
+        if certificates.len() == 16 || !remaining.starts_with("-----BEGIN CERTIFICATE-----") {
+            return Err(invalid());
+        }
+        let end = remaining
+            .find("-----END CERTIFICATE-----")
+            .ok_or_else(invalid)?
+            + "-----END CERTIFICATE-----".len();
+        certificates
+            .push(Certificate::from_pem(&remaining.as_bytes()[..end]).map_err(|_| invalid())?);
+        remaining = remaining[end..].trim();
+    }
+    Ok(certificates)
+}
+
+fn tls_connector(mode: TlsMode, root_ca: &[Certificate]) -> AppResult<TlsConnector> {
+    let mut builder = TlsConnector::builder();
+    builder.min_protocol_version(Some(native_tls::Protocol::Tlsv12));
+    // Explicit compatibility mode: still require encryption, never plaintext fallback.
+    if mode == TlsMode::Require {
+        builder
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true);
+    }
+    for certificate in root_ca {
+        builder.add_root_certificate(certificate.clone());
+    }
+    let tls = builder.build().map_err(|_| {
+        AppError::new(
+            "TLS_ERROR",
+            "Unable to initialize the system TLS certificate verifier.",
+        )
+    })?;
+    Ok(tls)
 }
 
 fn deadline() -> AppError {
@@ -181,11 +234,49 @@ fn deadline() -> AppError {
     )
 }
 
-fn connection_error(error: tokio_postgres::Error) -> AppError {
+fn connection_error(error: tokio_postgres::Error, mode: TlsMode) -> AppError {
     let code = error.as_db_error().map(|e| e.code().code());
+    // Use driver categories and typed causes, never expose raw errors or server details.
+    if error.to_string() == "error performing TLS handshake" {
+        let unsupported = error
+            .source()
+            .is_some_and(|cause| cause.to_string() == "server does not support TLS");
+        return AppError::new(
+            "TLS_CONNECTION_FAILED",
+            if unsupported {
+                "The server does not support TLS. No password was sent. Enable TLS on the server or use a trusted local tunnel."
+            } else if mode == TlsMode::VerifyFull {
+                "TLS handshake or certificate verification failed. For a private CA, choose the provider's CA PEM file and use a Host that matches the certificate. SSL Preferred in other clients does not enforce this verification."
+            } else {
+                "The TLS handshake failed. Check the server's TLS configuration and whether it requires a client certificate. Plaintext fallback is disabled."
+            },
+        );
+    }
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            let message = match io.kind() {
+                ErrorKind::ConnectionRefused => {
+                    "The server refused the connection. Check the port and that PostgreSQL is listening."
+                }
+                ErrorKind::TimedOut => {
+                    "The connection timed out. Check your network, VPN and firewall allowlist."
+                }
+                _ => {
+                    "Could not reach the database server. Check the hostname, port, network and firewall allowlist."
+                }
+            };
+            return AppError::new("NETWORK_ERROR", message);
+        }
+        cause = current.source();
+    }
     let message = match code {
         Some("28P01" | "28000") => "Authentication failed. Check the database role and password.",
-        Some("3D000") => "The selected database does not exist.",
+        Some("3D000") => {
+            "The selected database does not exist. Enter the database name; public is usually a schema name."
+        }
+        Some("53300") => "The server has reached its connection limit. Try again later.",
+        Some("57P03") => "The database server is starting up or unavailable. Try again later.",
         _ => {
             "Could not connect. Check the host, port, database, network and trusted TLS certificate."
         }
@@ -219,6 +310,17 @@ pub(crate) fn query_error(error: tokio_postgres::Error) -> AppError {
             "The database connection ended before the result was complete.",
         ),
     }
+}
+
+// No upper gate: future PostgreSQL releases may connect, with a UI notice until tested.
+fn validate_server_version(version: &str) -> AppResult<()> {
+    if !version.parse::<u32>().is_ok_and(|v| v >= 150_000) {
+        return Err(AppError::new(
+            "UNSUPPORTED_VERSION",
+            "PostgreSQL 15 or newer is required. Versions 15–18 are tested; newer versions can connect with compatibility unverified.",
+        ));
+    }
+    Ok(())
 }
 
 impl Database {
@@ -258,21 +360,36 @@ impl Database {
             .await
             .map_err(query_error)?;
         let version: String = row.get(0);
-        if !version
-            .parse::<u32>()
-            .is_ok_and(|v| (170_000..180_000).contains(&v))
-        {
-            return Err(AppError::new(
-                "UNSUPPORTED_VERSION",
-                "This preview enables PostgreSQL 17. Other versions need compatibility tests before they are enabled.",
-            ));
-        }
+        validate_server_version(&version)?;
         Ok(version)
     }
 
+    pub async fn schemas(&self) -> AppResult<Vec<String>> {
+        let rows = self.client.query("SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE') ORDER BY nspname LIMIT 1001", &[]).await.map_err(query_error)?;
+        if rows.len() > 1000 {
+            return Err(AppError::new(
+                "SCOPE_TOO_LARGE",
+                "This database exposes more than 1000 schemas.",
+            ));
+        }
+        Ok(rows.into_iter().map(|r| r.get(0)).collect())
+    }
+
     pub async fn tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
+        if schema.is_empty() || schema.len() > 253 || schema.contains('\0') {
+            return Err(AppError::policy("Invalid schema name."));
+        }
+        let accessible: bool = self.client.query_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", &[&schema]).await.map_err(query_error)?.get(0);
+        if !accessible {
+            return Err(AppError::new(
+                "SCHEMA_UNAVAILABLE",
+                "Schema does not exist or this account has no USAGE permission.",
+            ));
+        }
+
         // Exclude views, foreign/partitioned/inherited parents, RLS policies and
-        // custom types; these can hide executable dependencies behind a SELECT.
+        // custom types and virtual/unknown generated kinds; these can hide executable
+        // dependencies behind a SELECT (virtual columns were added in PostgreSQL 18).
         let rows = self.client.query(
             "SELECT c.oid, c.relname, c.reltuples::bigint FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -280,7 +397,7 @@ impl Database {
                AND has_table_privilege(c.oid, 'SELECT')
                AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid)
                AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-                 AND a.atttypid NOT IN (16,20,21,23,25,700,701,1042,1043,1082,1083,1114,1184,1186,1266,1700,2950))
+                 AND (a.attgenerated NOT IN ('', 's') OR a.atttypid NOT IN (16,20,21,23,25,700,701,1042,1043,1082,1083,1114,1184,1186,1266,1700,2950)))
              ORDER BY c.relname LIMIT 501", &[&schema]).await.map_err(query_error)?;
         if rows.len() > 500 {
             return Err(AppError::new(
@@ -315,11 +432,15 @@ impl Database {
         let token = self.client.cancel_token();
         let result = match self.tls {
             TlsMode::LocalOnly => timeout(Duration::from_secs(2), token.cancel_query(NoTls)).await,
-            TlsMode::VerifyFull => {
-                let Ok(tls) = tls_connector() else {
+            TlsMode::VerifyFull | TlsMode::Require => {
+                let Ok(tls) = tls_connector(self.tls, &self.root_ca) else {
                     return false;
                 };
-                timeout(Duration::from_secs(2), token.cancel_query(tls)).await
+                timeout(
+                    Duration::from_secs(2),
+                    token.cancel_query(MakeTlsConnector::new(tls)),
+                )
+                .await
             }
         };
         matches!(result, Ok(Ok(())))
@@ -606,5 +727,206 @@ impl Database {
 
     pub async fn stop(&self) {
         let _ = self.cancel().await;
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    #[test]
+    fn supported_and_future_versions_are_not_blocked() {
+        for version in [
+            "150000", "150018", "160000", "170007", "180000", "190000", "200001",
+        ] {
+            assert!(validate_server_version(version).is_ok(), "{version}");
+        }
+        for version in ["140999", "90624", "0", "", "unknown"] {
+            assert_eq!(
+                validate_server_version(version).unwrap_err().code,
+                "UNSUPPORTED_VERSION"
+            );
+        }
+    }
+
+    fn certificate() -> (String, String) {
+        let key = rcgen::KeyPair::from_pem(include_str!("../tests/fixtures/tls/test-only-key.pem"))
+            .unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap();
+        let now = std::time::SystemTime::now();
+        params.not_before = (now - Duration::from_secs(60)).into();
+        params.not_after = (now + Duration::from_secs(86400)).into();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        (params.self_signed(&key).unwrap().pem(), key.serialize_pem())
+    }
+
+    fn request(port: u16, tls: TlsMode) -> ConnectRequest {
+        ConnectRequest {
+            engine: Engine::Postgres,
+            name: "TLS fixture".into(),
+            host: "127.0.0.1".into(),
+            port,
+            database: "fixture".into(),
+            username: "reader".into(),
+            password: "CANARY_MUST_NOT_LEAK".into(),
+            schema: "public".into(),
+            tls,
+            root_ca_pem: String::new(),
+            manual_edits: false,
+        }
+    }
+
+    async fn handshake(mode: TlsMode, trust_ca: bool, hostname: &str) -> bool {
+        let (cert, key) = certificate();
+        let identity = native_tls::Identity::from_pkcs8(cert.as_bytes(), key.as_bytes()).unwrap();
+        let acceptor =
+            tokio_native_tls::TlsAcceptor::from(native_tls::TlsAcceptor::new(identity).unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _ = acceptor.accept(socket).await;
+        });
+        let certificates = if trust_ca {
+            parse_root_ca(&cert).unwrap()
+        } else {
+            vec![]
+        };
+        let connector =
+            tokio_native_tls::TlsConnector::from(tls_connector(mode, &certificates).unwrap());
+        let result = connector
+            .connect(hostname, TcpStream::connect(address).await.unwrap())
+            .await;
+        let connected = result.is_ok();
+        server.await.unwrap();
+        connected
+    }
+
+    #[tokio::test]
+    async fn tls_verification_and_explicit_compatibility_are_distinct() {
+        assert!(!handshake(TlsMode::VerifyFull, false, "localhost").await);
+        assert!(handshake(TlsMode::VerifyFull, true, "localhost").await);
+        assert!(!handshake(TlsMode::VerifyFull, true, "127.0.0.1").await);
+        assert!(handshake(TlsMode::Require, false, "127.0.0.1").await);
+    }
+
+    #[tokio::test]
+    async fn require_tls_never_falls_back_or_sends_credentials_to_plaintext_server() {
+        for mode in [TlsMode::VerifyFull, TlsMode::Require] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut ssl_request = [0; 8];
+                socket.read_exact(&mut ssl_request).await.unwrap();
+                assert_eq!(ssl_request, [0, 0, 0, 8, 4, 210, 22, 47]);
+                socket.write_all(b"N").await.unwrap();
+                let mut buffer = [0; 128];
+                assert_eq!(
+                    timeout(Duration::from_secs(2), socket.read(&mut buffer))
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    0
+                );
+            });
+            let error = Profile::new(request(port, mode))
+                .unwrap()
+                .open()
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "TLS_CONNECTION_FAILED");
+            assert!(error.message.contains("does not support TLS"));
+            assert!(!error.message.contains("CANARY"));
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn ca_input_rejects_keys_garbage_and_oversize_bundles() {
+        let (cert, key) = certificate();
+        assert_eq!(parse_root_ca(&cert).unwrap().len(), 1);
+        for invalid in [
+            key,
+            "x".repeat(65537),
+            format!("{cert}garbage"),
+            cert.repeat(17),
+        ] {
+            assert_eq!(parse_root_ca(&invalid).err().unwrap().code, "INVALID_CA");
+        }
+        let mut r = request(5432, TlsMode::Require);
+        r.root_ca_pem = cert;
+        assert_eq!(Profile::new(r).err().unwrap().code, "INVALID_CA");
+    }
+
+    #[tokio::test]
+    async fn network_failure_has_actionable_sanitized_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let error = Profile::new(request(port, TlsMode::VerifyFull))
+            .unwrap()
+            .open()
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "NETWORK_ERROR");
+        assert!(!error.message.contains("CANARY"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the disposable PostgreSQL Compose fixture"]
+    async fn encrypted_connection_authenticates_and_queries_through_tls() {
+        let (cert, key) = certificate();
+        let identity = native_tls::Identity::from_pkcs8(cert.as_bytes(), key.as_bytes()).unwrap();
+        let acceptor =
+            tokio_native_tls::TlsAcceptor::from(native_tls::TlsAcceptor::new(identity).unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let proxy = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 8];
+            socket.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, [0, 0, 0, 8, 4, 210, 22, 47]);
+            socket.write_all(b"S").await.unwrap();
+            let mut tls = acceptor.accept(socket).await.unwrap();
+            let fixture_port = std::env::var("BUGGY_TEST_POSTGRES_PORT")
+                .unwrap_or_else(|_| "15432".into())
+                .parse::<u16>()
+                .unwrap();
+            let mut fixture = TcpStream::connect(("127.0.0.1", fixture_port))
+                .await
+                .unwrap();
+            let _ = tokio::io::copy_bidirectional(&mut tls, &mut fixture).await;
+        });
+        let mut r = request(port, TlsMode::Require);
+        r.database = "tablepor_test".into();
+        r.username = "tablepor_reader".into();
+        r.password = "local-reader-only".into();
+        let db = Profile::new(r).unwrap().open().await.unwrap();
+        assert_eq!(
+            db.client
+                .query_one("SELECT 1::int4", &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            1
+        );
+        assert_eq!(
+            db.client
+                .query_one("SHOW transaction_read_only", &[])
+                .await
+                .unwrap()
+                .get::<_, String>(0),
+            "on"
+        );
+        drop(db);
+        proxy.abort();
     }
 }

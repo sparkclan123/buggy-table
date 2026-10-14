@@ -44,8 +44,11 @@ pub async fn inspect_table(
     state: State<'_, Workbench>,
     connection_id: String,
     table: String,
+    schema: Option<String>,
 ) -> AppResult<Vec<IndexInfo>> {
-    state.indexes(&connection_id, &table).await
+    state
+        .indexes_in_schema(&connection_id, &table, schema.as_deref())
+        .await
 }
 
 #[tauri::command]

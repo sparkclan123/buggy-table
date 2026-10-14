@@ -26,11 +26,13 @@ fn request(engine: Engine) -> ConnectRequest {
         .into(),
         schema: "".into(),
         tls: TlsMode::LocalOnly,
+        root_ca_pem: String::new(),
         manual_edits: false,
     }
 }
 fn query(id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         sql: sql.into(),
@@ -39,6 +41,7 @@ fn query(id: &str, sql: &str) -> QueryRequest {
 }
 fn browse(id: &str) -> BrowseRequest {
     BrowseRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: "items".into(),
@@ -165,6 +168,7 @@ async fn mysql_rejects_mutation_indirection_and_write_accounts() {
     assert_eq!(app.connect(r).await.unwrap_err().code, "POLICY_DENIED");
     assert_eq!(
         app.save(SaveRequest {
+            schema: None,
             connection_id: info.id.clone(),
             request_id: Uuid::new_v4().to_string(),
             table: "items".into(),
@@ -333,6 +337,13 @@ async fn redis_blocks_writes_even_with_admin_credentials_and_redacts_errors() {
 async fn adapters_reject_unsafe_transport_and_manual_write_flags_before_connecting() {
     let app = Workbench::default();
     for engine in [Engine::Mysql, Engine::Redis] {
+        let mut r = request(engine);
+        r.tls = TlsMode::Require;
+        assert_eq!(app.connect(r).await.unwrap_err().code, "INVALID_CONNECTION");
+        let mut r = request(engine);
+        r.tls = TlsMode::VerifyFull;
+        r.root_ca_pem = "unsupported CA".into();
+        assert_eq!(app.connect(r).await.unwrap_err().code, "INVALID_CONNECTION");
         let mut r = request(engine);
         r.host = "example.com".into();
         assert_eq!(app.connect(r).await.unwrap_err().code, "TLS_REQUIRED");

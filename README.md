@@ -2,14 +2,14 @@
 
 A personal, local-first database workspace built with **Rust, Tauri 2, Svelte and TypeScript**.
 
-รุ่นนี้รองรับ **PostgreSQL 17, MySQL 8.x และ Redis standalone** โดย PostgreSQL อ่าน/แก้ไขเซลล์ได้ ส่วน MySQL และ Redis เปิดแบบอ่านอย่างเดียว มีหน้าตัวอย่างสำหรับลอง UI โดยไม่ต้องเชื่อมฐานข้อมูล ยังไม่ครบทุกข้อในแผนระยะยาว
+รุ่นนี้รองรับ **PostgreSQL 15–18, MySQL 8.x และ Redis standalone** โดย PostgreSQL อ่าน/แก้ไขเซลล์ได้ ส่วน MySQL และ Redis เปิดแบบอ่านอย่างเดียว มีหน้าตัวอย่างสำหรับลอง UI โดยไม่ต้องเชื่อมฐานข้อมูล ยังไม่ครบทุกข้อในแผนระยะยาว
 
 ## ใช้งานได้แล้ว
 
 - เลือก PostgreSQL / MySQL / Redis ในหน้าต่อฐานข้อมูล พร้อม port เริ่มต้นตามชนิด
 - MySQL: ตารางหลายแท็บ, filter/sort, SQL SELECT, EXPLAIN, structure, indexes และ overview; ต้องใช้บัญชี SELECT/SHOW VIEW เท่านั้น
 - Redis: SCAN คีย์ตาม pattern, ดูค่า/ชนิด/TTL, อ่าน string/hash/list/set/sorted set และรันคำสั่งอ่านแบบ JSON arguments
-- เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP
+- เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว
 - เปิดหลายตารางเป็นแท็บด้านบน เก็บ filter, page, SQL, scroll และ pending edits แยกกัน
 - คลิกเซลล์แล้วพิมพ์ในตารางได้ทันที: Enter จบการแก้ไข, Escape คืนค่าก่อนแก้, Shift+Enter ขึ้นบรรทัดใหม่; Save changes หรือ Cmd/Ctrl+S เพื่อบันทึก และ Discard เพื่อยกเลิก
 - ลากขอบหัวคอลัมน์เพื่อปรับความกว้าง ดับเบิลคลิกขอบเพื่อคืนขนาดเดิม หรือโฟกัสขอบแล้วกดลูกศรซ้าย/ขวา
@@ -31,7 +31,10 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 
 เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
 
-**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, saved connections/keychain, SSH, query history, joins/CTEs/functions/casts, views/RLS/custom types และการรับรองใช้งาน production
+- จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
+- สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
+
+**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, SSH, query history, joins/CTEs/functions/casts, views/RLS/custom types และการรับรองใช้งาน production
 
 ## เริ่มรัน
 
@@ -106,7 +109,7 @@ LIMIT 20;
 | MySQL 8.4 | `127.0.0.1:13306` | `tablepor_test` | `tablepor_reader` | `local-mysql-reader` |
 | Redis 8 | `127.0.0.1:16379` | `0` | `tablepor_reader` | `local-redis-reader` |
 
-เลือก Local only สำหรับ fixture เท่านั้น สำหรับเครื่องอื่นใช้ verified TLS และ certificate ที่ระบบเชื่อถือ MySQL ต้องมี direct SELECT/SHOW VIEW grants ไม่มี roles/สิทธิ์เขียน ส่วน Redis ควรใช้ ACL user จำกัดคำสั่ง ไม่ต้องให้สิทธิ์ admin; แอปบล็อกคำสั่งเขียน/ลบเองด้วย
+เลือก Local only สำหรับ fixture เท่านั้น สำหรับเครื่องอื่นใช้ verified TLS และ certificate ที่ระบบเชื่อถือ; PostgreSQL รองรับ custom CA และโหมด TLS แบบเข้ารหัสโดยไม่ตรวจใบรับรอง ดู [การแก้ปัญหาเชื่อมต่อ](docs/CONNECTIONS.md) MySQL ต้องมี direct SELECT/SHOW VIEW grants ไม่มี roles/สิทธิ์เขียน ส่วน Redis ควรใช้ ACL user จำกัดคำสั่ง ไม่ต้องให้สิทธิ์ admin; แอปบล็อกคำสั่งเขียน/ลบเองด้วย
 
 MySQL SQL ใช้ชื่อแบบ ``SELECT * FROM `tablepor_test`.`items` LIMIT 200``. Redis เปิดหน้าคีย์แยกจากตาราง SQL ใช้ Scan / refresh และ Next scan; คลิกคีย์เพื่อดู preview และ TTL หรือกรอก `["GET", "my-key"]`, `["INFO", "memory"]`, `["HSCAN", "my-hash", "0"]` แล้ว Run command. GET แสดงสูงสุด 64 KiB; collection แสดงชุดแรกและใช้ cursor อ่านต่อได้ คำสั่งต้องเป็น JSON array เพื่อรองรับชื่อคีย์ที่มีช่องว่างอย่างไม่กำกวม
 

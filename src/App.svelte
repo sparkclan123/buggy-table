@@ -6,7 +6,6 @@
     Plus,
     Search,
     ChevronRight,
-    ChevronDown,
     ShieldCheck,
     Activity,
     Settings2,
@@ -34,32 +33,62 @@
   let updating = $state(false);
   import { onMount } from 'svelte';
   import { guardWindowClose } from './lib/window-lifecycle';
-  import { createWorkspace, changeCell, changedRows, type TableView as Tab } from './lib/workspace';
+  import {
+    tableKey,
+    createWorkspace,
+    changeCell,
+    changedRows,
+    type TableView as Tab,
+  } from './lib/workspace';
   import RedisWorkspace from './components/RedisWorkspace.svelte';
   import ConfirmClose from './components/ConfirmClose.svelte';
   import ConnectionDialog from './components/ConnectionDialog.svelte';
+  import ConnectionManager from './components/ConnectionManager.svelte';
+  import { createRedisWorkspace } from './lib/redis-workspace';
+  import {
+    connectionWorkspace,
+    savedWorkspace,
+    hasEdits,
+    layoutOf,
+    type ConnectionWorkspace,
+  } from './lib/connections';
   import ResultGrid from './components/ResultGrid.svelte';
   import FilterBuilder from './components/FilterBuilder.svelte';
   import { api, errorMessage, desktopAvailable } from './lib/api';
   import { browseSample, sampleConnection, sampleIndexes, sampleRows } from './lib/sample';
-  import type { ConnectionInfo, Overview, TableInfo } from './lib/types';
+  import type { ConnectedProfile, SavedConnection, TableInfo } from './lib/types';
 
-  type Page = 'explorer' | 'overview' | 'privacy' | 'assistant';
-  let connection = $state<ConnectionInfo>(sampleConnection);
-  const initial = createWorkspace(sampleConnection.tables[0]);
-  initial.result = browseSample(sampleConnection.tables[0], [], 0);
-  let openTables = $state([initial]);
-  let activeId = $state(initial.id);
-  let workspace = $derived(openTables.find((t) => t.id === activeId)!);
+  const initialEntry = connectionWorkspace(sampleConnection);
+  initialEntry.tabs = [createWorkspace(sampleConnection.tables[0])];
+  initialEntry.tabs[0].result = browseSample(sampleConnection.tables[0], [], 0);
+  initialEntry.activeId = initialEntry.tabs[0].id;
+  let entries = $state<ConnectionWorkspace[]>([initialEntry]);
+  let activeKey = $state('sample');
+  const session = $derived(entries.find((e) => e.key === activeKey)!);
+  const connection = $derived(session.info);
+  const openTables = $derived(session.tabs);
+  const activeId = $derived(session.activeId);
+  const workspace = $derived(openTables.find((t) => t.id === activeId)!);
   let closeTarget = $state<string | null>(null);
   const dirtyCount = $derived(Object.keys(workspace.edits).length);
-  const anyDirty = $derived(openTables.some((t) => Object.keys(t.edits).length > 0 || t.uncertain));
+  const anyDirty = $derived(entries.some(hasEdits));
+  const page = $derived(session.page);
+  const search = $derived(session.search);
+  const overview = $derived(session.overview);
   let saving = $state(false);
-
-  let page = $state<Page>('explorer');
-  let search = $state('');
   let showConnection = $state(false);
-  let overview = $state<Overview | null>(null);
+  let connectionInitial = $state<SavedConnection | null>(null);
+  let showManager = $state(false);
+  const quickConnections = $derived(
+    entries
+      .filter((e) => e.key !== 'sample')
+      .sort(
+        (a, b) =>
+          Number(b.saved?.pinned ?? false) - Number(a.saved?.pinned ?? false) ||
+          (b.saved?.lastUsed ?? 0) - (a.saved?.lastUsed ?? 0),
+      )
+      .slice(0, 5),
+  );
   let busy = $state(false);
   let error = $state('');
   let activeRequest = $state<string | null>(null);
@@ -72,9 +101,18 @@
         : 'PostgreSQL',
   );
   const isSample = $derived(connection.id === 'sample');
-  const selected = $derived(connection.tables.find((t) => t.name === workspace.selectedName));
+  const untestedPostgres = $derived(
+    !isSample && connection.engine === 'postgres' && Number(connection.serverVersion) >= 190000,
+  );
+  const selected = $derived(
+    connection.tables.find(
+      (t) => t.name === workspace.selectedName && t.schema === workspace.schema,
+    ),
+  );
   const visibleTables = $derived(
-    connection.tables.filter((t) => t.name.toLowerCase().includes(search.toLowerCase())),
+    connection.tables.filter(
+      (t) => t.schema === session.navSchema && t.name.toLowerCase().includes(search.toLowerCase()),
+    ),
   );
   const editorSchema = $derived(
     Object.fromEntries(
@@ -87,7 +125,7 @@
     nextPage = workspace.pageNumber,
     filters = workspace.appliedFilters,
   ) {
-    if (!table || busy) return;
+    if (!table || busy || !session.online) return;
     if (dirtyCount || workspace.uncertain) {
       error = 'Save or discard pending edits before refreshing, filtering or changing pages.';
       return;
@@ -115,6 +153,7 @@
     try {
       const data = await api.browse({
         connectionId: connection.id,
+        schema: table.schema,
         requestId,
         table: table.name,
         filters,
@@ -123,7 +162,10 @@
         descending: workspace.descending,
         page: nextPage,
       });
-      if (current === epoch) workspace.result = data;
+      if (current === epoch) {
+        workspace.result = data;
+        trimResults();
+      }
     } catch (e) {
       if (current === epoch) error = errorMessage(e);
     } finally {
@@ -136,24 +178,28 @@
 
   async function selectTable(table: TableInfo) {
     if (busy) return;
-    page = 'explorer';
+    session.page = 'explorer';
     error = '';
-    const id = `${table.schema}.${table.name}`;
+    const id = tableKey(table.schema, table.name);
     if (openTables.some((t) => t.id === id)) {
-      activeId = id;
+      await activateTab(id);
       return;
     }
-    openTables = openTables.filter((t) => t.id !== 'empty');
+    session.tabs = openTables.filter((t) => t.id !== 'empty');
+    if (openTables.length >= 40) {
+      error = 'Close an unused table tab first (maximum 40 per connection).';
+      return;
+    }
     openTables.push(createWorkspace(table, connection.engine));
-    activeId = id;
+    session.activeId = id;
+    void persistLayout(session);
     await loadData(table, 0, []);
   }
 
   function openConnection() {
-    if (anyDirty) {
-      error = 'Save or discard your pending table edits before changing connections.';
-      return;
-    }
+    if (busy) return;
+    connectionInitial = null;
+    showManager = false;
     showConnection = true;
   }
 
@@ -165,16 +211,19 @@
       closeTarget = id;
       return;
     }
+    const wasActive = activeId === id;
     const index = openTables.findIndex((t) => t.id === id);
-    openTables = openTables.filter((t) => t.id !== id);
-    if (!openTables.length) openTables = [createWorkspace()];
-    if (activeId === id) activeId = openTables[Math.min(index, openTables.length - 1)].id;
+    session.tabs = openTables.filter((t) => t.id !== id);
+    if (!openTables.length) session.tabs = [createWorkspace()];
+    if (activeId === id) session.activeId = openTables[Math.min(index, openTables.length - 1)].id;
     closeTarget = null;
+    if (wasActive && session.online) void activateTab(session.activeId);
+    void persistLayout(session);
     error = '';
   }
 
   async function saveChanges() {
-    if (busy || !selected || !dirtyCount || workspace.uncertain) return false;
+    if (busy || !session.online || !selected || !dirtyCount || workspace.uncertain) return false;
     const rows = changedRows(workspace.result, workspace.edits);
     saving = true;
     busy = true;
@@ -197,6 +246,7 @@
       } else {
         await api.save({
           connectionId: connection.id,
+          schema: selected.schema,
           requestId: crypto.randomUUID(),
           table: selected.name,
           rows,
@@ -229,13 +279,26 @@
 
   async function saveAndClose() {
     if (!closeTarget) return;
-    activeId = closeTarget;
+    session.activeId = closeTarget;
     const id = closeTarget;
     if (await saveChanges()) closeTable(id, true);
     else closeTarget = null;
   }
 
   onMount(() => {
+    if (desktopAvailable)
+      void api
+        .connections()
+        .then((profiles) => {
+          if (!profiles?.length) return;
+          for (const profile of profiles)
+            if (!entries.some((e) => e.key === profile.id)) entries.push(savedWorkspace(profile));
+          if (activeKey === 'sample' && !hasEdits(session) && !showConnection)
+            activeKey = profiles.sort((a, b) => b.lastUsed - a.lastUsed)[0].id;
+        })
+        .catch((e) => {
+          error = errorMessage(e);
+        });
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (anyDirty || saving || updating) {
         event.preventDefault();
@@ -247,9 +310,13 @@
     void guardWindowClose(
       () => anyDirty || saving || updating,
       () => {
-        page = 'explorer';
+        if (!busy && !updating) {
+          const pending = entries.find(hasEdits);
+          if (pending) activeKey = pending.key;
+        }
+        session.page = 'explorer';
         if (!busy)
-          activeId =
+          session.activeId =
             openTables.find((t) => Object.keys(t.edits).length || t.uncertain)?.id ?? activeId;
         error = updating
           ? 'Wait for the update to finish before closing.'
@@ -274,42 +341,215 @@
     };
   });
 
-  async function connected(next: ConnectionInfo) {
-    const previousId = connection.id;
-    openTables = [createWorkspace()];
-    activeId = 'empty';
-    connection = next;
-    showConnection = false;
-    overview = null;
-    search = '';
-    workspace.result = null;
-    workspace.indexes = [];
+  function trimResults() {
+    workspace.lastAccess = Date.now();
+    const cached = entries
+      .flatMap((e) => e.tabs)
+      .filter(
+        (t) =>
+          t !== workspace &&
+          !Object.keys(t.edits).length &&
+          !t.uncertain &&
+          (t.result || t.queryResult),
+      )
+      .sort((a, b) => b.lastAccess - a.lastAccess);
+    for (const tab of cached.slice(5)) {
+      tab.result = null;
+      tab.queryResult = null;
+      tab.plan = null;
+      tab.indexes = [];
+    }
+  }
+
+  const layoutWrites = new Map<string, Promise<void>>();
+  async function persistLayout(entry: ConnectionWorkspace) {
+    if (!entry.saved) return;
+    const layout = layoutOf(entry);
+    entry.saved.layout = layout;
+    const id = entry.saved.id,
+      pinned = entry.saved.pinned,
+      group = entry.saved.group;
+    const pending = (layoutWrites.get(id) ?? Promise.resolve())
+      .then(() => api.updateConnection(id, layout, pinned, group))
+      .catch((e) => {
+        error = `Connection settings were not saved. ${errorMessage(e)}`;
+      });
+    layoutWrites.set(id, pending);
+    await pending;
+    if (layoutWrites.get(id) === pending) layoutWrites.delete(id);
+  }
+
+  function switchConnection(entry: ConnectionWorkspace) {
+    if (busy) return;
+    activeKey = entry.key;
+    showManager = false;
     error = '';
-    if (previousId !== 'sample') await api.disconnect(previousId).catch(() => {});
-    if (next.tables[0]) await selectTable(next.tables[0]);
-    else {
-      workspace.selectedName = '';
-      page = 'explorer';
-      workspace.tab = 'sql';
-      workspace.sql = 'SELECT 1;';
+    closeTarget = null;
+    if (entry.saved) {
+      entry.saved.lastUsed = Math.floor(Date.now() / 1000);
+      void persistLayout(entry);
+    }
+    if (entry.online && workspace.tab === 'data' && !workspace.result) void loadData();
+  }
+
+  async function ensureSchema(schema: string) {
+    if (isSample || connection.engine !== 'postgres' || session.loadedSchemas.includes(schema))
+      return;
+    const tables = await api.schemaTables(connection.id, schema);
+    session.info.tables = [...connection.tables.filter((t) => t.schema !== schema), ...tables];
+    session.loadedSchemas.push(schema);
+  }
+
+  async function activateTab(id: string) {
+    if (busy || !session.online) return;
+    session.activeId = id;
+    workspace.lastAccess = Date.now();
+    error = '';
+    try {
+      busy = true;
+      await ensureSchema(workspace.schema || session.navSchema);
+      if (workspace.schema) session.navSchema = workspace.schema;
+      if (!workspace.filters[0]?.column && selected)
+        workspace.filters = [
+          { column: selected.columns[0]?.name ?? '', operator: 'equals', value: '' },
+        ];
+    } catch (e) {
+      error = errorMessage(e);
+      return;
+    } finally {
+      busy = false;
+    }
+    void persistLayout(session);
+    if (workspace.tab === 'data' && !workspace.result) await loadData();
+  }
+
+  async function changeSchema(schema: string) {
+    if (busy) return;
+    busy = true;
+    error = '';
+    try {
+      await ensureSchema(schema);
+      session.navSchema = schema;
+      if (!workspace.selectedName) workspace.schema = schema;
+      session.search = '';
+      void persistLayout(session);
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function connected(result: ConnectedProfile) {
+    const next = result.connection;
+    const existing = entries.find((e) => e.key === (result.profile?.id ?? connectionInitial?.id));
+    const entry = connectionWorkspace(next, result.profile ?? existing?.saved ?? null);
+    if (existing) entries = entries.map((e) => (e.key === existing.key ? entry : e));
+    else entries.push(entry);
+    activeKey = entry.key;
+    showConnection = false;
+    showManager = false;
+    error = result.warning ?? '';
+    let schemaWarning = '';
+    if (next.engine === 'postgres') {
+      busy = true;
+      try {
+        session.schemas = (await api.schemas(next.id)) ?? [next.schema];
+      } catch (e) {
+        schemaWarning = errorMessage(e);
+      } finally {
+        busy = false;
+      }
+    }
+    if (entry.tabs[0].id === 'empty') {
+      entry.tabs[0].schema = entry.navSchema;
+      if (next.tables[0]) await selectTable(next.tables[0]);
+    } else await activateTab(entry.activeId);
+    if (entry.saved) void persistLayout(entry);
+    if (result.warning || schemaWarning)
+      error = [result.warning, schemaWarning].filter(Boolean).join(' ');
+  }
+
+  async function reconnect(entry: ConnectionWorkspace) {
+    if (busy) return;
+    switchConnection(entry);
+    connectionInitial = entry.saved;
+    if (!entry.saved?.hasPassword) {
+      showConnection = true;
+      return;
+    }
+    busy = true;
+    try {
+      const result = await api.reconnect(entry.saved.id);
+      busy = false;
+      await connected(result);
+    } catch (e) {
+      error = errorMessage(e);
+      showConnection = true;
+    } finally {
+      busy = false;
     }
   }
 
   async function disconnect() {
-    if (busy) return;
-    if (anyDirty) {
-      error = 'Save or discard your pending table edits before disconnecting.';
+    if (busy || !session.online || isSample) return;
+    if (hasEdits(session)) {
+      error = 'Save or discard this connection’s pending edits before disconnecting.';
       return;
     }
+    busy = true;
     try {
       await api.disconnect(connection.id);
-      connection = sampleConnection;
-      openTables = [createWorkspace()];
-      activeId = 'empty';
-      overview = null;
-      await selectTable(sampleConnection.tables[0]);
+      await persistLayout(session);
+      session.online = false;
+      session.overview = null;
+      session.redis = createRedisWorkspace();
+      // Keep table identities, but drop cached results and SQL text after disconnect.
+      session.tabs = session.tabs.map((t) =>
+        createWorkspace(
+          t.selectedName
+            ? { schema: t.schema, name: t.selectedName, columns: [], estimatedRows: null }
+            : undefined,
+          connection.engine,
+        ),
+      );
+      session.info.tables = [];
+      session.loadedSchemas = [];
+      if (!session.saved) {
+        const key = session.key;
+        entries = entries.filter((e) => e.key !== key);
+        activeKey = entries.find((e) => e.key !== 'sample')?.key ?? 'sample';
+      }
     } catch (e) {
       error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pinConnection(entry: ConnectionWorkspace) {
+    if (!entry.saved || busy) return;
+    entry.saved.pinned = !entry.saved.pinned;
+    await persistLayout(entry);
+  }
+  function editConnection(entry: ConnectionWorkspace) {
+    if (entry.online || busy) return;
+    switchConnection(entry);
+    connectionInitial = entry.saved;
+    showConnection = true;
+  }
+  async function removeConnection(entry: ConnectionWorkspace) {
+    if (!entry.saved || entry.online || hasEdits(entry) || busy) return;
+    busy = true;
+    try {
+      await api.removeConnection(entry.saved.id);
+      entries = entries.filter((e) => e.key !== entry.key);
+      if (activeKey === entry.key)
+        activeKey = entries.find((e) => e.key !== 'sample')?.key ?? 'sample';
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -327,7 +567,7 @@
       }
       busy = true;
       try {
-        workspace.indexes = await api.indexes(connection.id, selected.name);
+        workspace.indexes = await api.indexes(connection.id, selected.name, selected.schema);
       } catch (e) {
         error = errorMessage(e);
       } finally {
@@ -351,7 +591,13 @@
     workspace.plan = null;
     workspace.queryResult = null;
     try {
-      const data = await api.query(connection.id, requestId, workspace.sql, explain);
+      const data = await api.query(
+        connection.id,
+        requestId,
+        workspace.sql,
+        explain,
+        workspace.schema || session.navSchema,
+      );
       if (current === epoch) {
         if (explain) {
           const raw = data.rows[0]?.[0] ?? '{}';
@@ -361,6 +607,7 @@
             workspace.plan = raw;
           }
         } else workspace.queryResult = data;
+        trimResults();
       }
     } catch (e) {
       if (current === epoch) error = errorMessage(e);
@@ -382,12 +629,12 @@
   }
 
   async function refreshOverview() {
-    if (isSample || busy) return;
+    if (isSample || busy || !session.online) return;
     busy = true;
     error = '';
-    overview = null;
+    session.overview = null;
     try {
-      overview = await api.overview(connection.id);
+      session.overview = await api.overview(connection.id);
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -395,9 +642,9 @@
     }
   }
 
-  async function navigate(next: Page) {
+  async function navigate(next: ConnectionWorkspace['page']) {
     if (busy) return;
-    page = next;
+    session.page = next;
     error = '';
     if (next === 'overview' && connection.engine !== 'redis') await refreshOverview();
   }
@@ -441,6 +688,12 @@
   function handleShortcut(event: KeyboardEvent) {
     if (updating || event.isComposing || document.querySelector('dialog[open]')) return;
     const modifier = event.metaKey || event.ctrlKey;
+    if (modifier && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (!busy) showManager = true;
+      return;
+    }
+    if (!session.online) return;
     if (modifier && event.key.toLowerCase() === 's') {
       event.preventDefault();
       void saveChanges();
@@ -501,59 +754,129 @@
         disabled={busy}><Plus size={16} /></button
       >
     </div>
+    <button
+      class="connection-switcher"
+      onclick={() => (showManager = true)}
+      disabled={busy}
+      aria-label="Search or switch connections"
+      ><Search size={13} />Find connection…<kbd>⌘/Ctrl K</kbd></button
+    >
+    {#if quickConnections.length}<div
+        class="quick-connections"
+        aria-label="Pinned and recent connections"
+      >
+        {#each quickConnections as entry (entry.key)}<div
+            class:current={entry.key === activeKey}
+            class="quick-connection"
+          >
+            <button
+              onclick={() => switchConnection(entry)}
+              disabled={busy}
+              title={`${entry.info.name} · ${entry.info.host} / ${entry.info.database}`}
+              aria-label={`Switch to ${entry.info.name}`}
+              ><span class="engine-code"
+                >{entry.info.engine === 'postgres'
+                  ? 'PG'
+                  : entry.info.engine === 'mysql'
+                    ? 'MY'
+                    : 'RD'}</span
+              ><span
+                >{entry.saved?.pinned ? '★ ' : ''}{entry.info.name}{hasEdits(entry)
+                  ? ' •'
+                  : ''}</span
+              ></button
+            >
+            {#if !entry.online}<button
+                class="quick-reconnect"
+                title="Reconnect"
+                aria-label={`Reconnect ${entry.info.name}`}
+                onclick={() => reconnect(entry)}
+                disabled={busy}><PlugZap size={13} /></button
+              >{:else}<span class="tiny-dot" title="Session ready"></span>{/if}
+          </div>{/each}
+        <button class="all-connections" onclick={() => (showManager = true)} disabled={busy}
+          >All connections ({entries.length - 1})</button
+        >
+      </div>{/if}
     <div class="connection-tree">
       <div class="connection-root">
-        <ChevronDown size={13} /><span class="db-icon"><Database size={15} /></span><strong
+        <span class="db-icon"><Database size={14} /></span><strong title={connection.name}
           >{connection.name}</strong
-        ><span class={`connection-dot ${isSample ? 'sample-dot' : ''}`}></span>
+        >
+        {#if !isSample && session.online}<button
+            class="icon-button"
+            aria-label="Disconnect current connection"
+            title="Disconnect"
+            onclick={disconnect}
+            disabled={busy}><Unplug size={13} /></button
+          >{/if}
       </div>
       {#if connection.engine === 'redis'}
         <div class="schema-root">Database {connection.database} · Standalone</div>
-        <p class="muted small">
-          Browse keys in Key explorer. Server information is available in Database overview.
-        </p>
       {:else}
-        <div class="schema-root">
-          <ChevronDown size={13} /><Columns3 size={14} />{connection.schema}<span
-            >{connection.tables.length}</span
-          >
-        </div>
         <div class="table-search">
           <Search size={13} /><input
             aria-label="Search tables"
-            bind:value={search}
+            bind:value={session.search}
             placeholder="Find a table…"
             spellcheck="false"
+            disabled={!session.online}
           />
         </div>
         <div class="table-list">
           {#each visibleTables as table}<button
-              class:selected={page === 'explorer' && workspace.selectedName === table.name}
+              class:selected={page === 'explorer' &&
+                workspace.selectedName === table.name &&
+                workspace.schema === table.schema}
               onclick={() => selectTable(table)}
-              disabled={busy}
-              ><Table2 size={14} />{table.name}{#if workspace.selectedName === table.name}<span
-                  class="selected-indicator"
-                ></span>{/if}</button
+              disabled={busy || !session.online}><Table2 size={14} />{table.name}</button
             >{/each}
           {#if !visibleTables.length}<p class="sidebar-empty">
-              {search ? 'No matching tables' : 'No approved base tables'}
+              {!session.online
+                ? 'Reconnect to load tables'
+                : search
+                  ? 'No matching tables'
+                  : 'No approved base tables'}
             </p>{/if}
         </div>
       {/if}
     </div>
     <div class="sidebar-bottom">
-      <ThemeControl />
+      <label class="schema-control">
+        <span>{connection.engine === 'postgres' ? 'Schema' : 'Database'}</span>
+        <select
+          aria-label="Select PostgreSQL schema"
+          value={session.navSchema}
+          disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
+          onchange={async (event) => {
+            const select = event.currentTarget;
+            await changeSchema(select.value);
+            select.value = session.navSchema;
+          }}
+        >
+          {#each [...new Set([session.navSchema, ...session.schemas])] as schema}
+            <option value={schema}>{schema}</option>
+          {/each}
+        </select>
+      </label>
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
-      <div class="sidebar-version"><span>buggy-table</span><span>v{__APP_VERSION__}</span></div>
+      <div class="sidebar-version">
+        <span>buggy-table</span><span class="version-actions"
+          >v{__APP_VERSION__}<ThemeControl /></span
+        >
+      </div>
     </div>
   </aside>
 
   <div class="main-shell">
     <header class="topbar">
       <div class="breadcrumbs">
-        <PanelLeft size={16} /><span>Workspace</span><ChevronRight size={12} /><strong
+        <PanelLeft size={16} /><span
+          title={`${connection.host}:${connection.port} / ${connection.database}`}
+          >{isSample ? 'Workspace' : connection.name}</span
+        ><ChevronRight size={12} /><strong
           >{page === 'explorer'
             ? 'Database explorer'
             : page === 'overview'
@@ -580,6 +903,10 @@
             >Connect your database<ArrowUpRight size={14} /></button
           >
         </div>{/if}
+      {#if untestedPostgres}<div class="sample-banner" role="status">
+          PostgreSQL {Math.floor(Number(connection.serverVersion) / 10000)} · Compatibility not yet tested.
+          Tested versions: 15–18.
+        </div>{/if}
       {#if error}<div class="error-banner global-error" role="alert">
           <ShieldCheck size={18} /><span>{error}</span><button
             class="icon-button"
@@ -588,9 +915,20 @@
           >
         </div>{/if}
 
-      {#if connection.engine === 'redis' && (page === 'explorer' || page === 'overview')}
+      {#if !session.online && page !== 'privacy'}
+        <div class="feature-empty">
+          <div class="large-icon"><Unplug size={28} /></div>
+          <h2>{connection.name}</h2>
+          <p>{engineName} · {connection.host}:{connection.port} / {connection.database}</p>
+          <p>Saved on this device. Reconnect when you are ready.</p>
+          <button class="primary-button" onclick={() => reconnect(session)} disabled={busy}
+            ><PlugZap size={16} />{busy ? 'Connecting…' : 'Reconnect'}</button
+          >
+        </div>
+      {:else if connection.engine === 'redis' && (page === 'explorer' || page === 'overview')}
         {#key `${connection.id}-${page}`}<RedisWorkspace
             {connection}
+            bind:view={session.redis}
             showOverview={page === 'overview'}
             bind:busy
           />{/key}
@@ -601,17 +939,16 @@
               <button
                 role="tab"
                 aria-selected={item.id === activeId}
-                onclick={() => {
-                  if (!busy) {
-                    activeId = item.id;
-                    error = '';
-                  }
-                }}
+                onclick={() => activateTab(item.id)}
                 disabled={busy}
               >
                 <Table2
                   size={14}
-                />{item.selectedName}{#if Object.keys(item.edits).length || item.uncertain}<span
+                />{item.selectedName}{#if item.schema && item.schema !== 'public'}<small
+                    class="muted"
+                  >
+                    · {item.schema}</small
+                  >{/if}{#if Object.keys(item.edits).length || item.uncertain}<span
                     class="dirty-dot"
                     aria-label="Unsaved changes"
                   ></span>{/if}
@@ -636,7 +973,7 @@
             >
           </h1>
           <span class="muted small"
-            >{connection.database} / {connection.schema}{#if selected}
+            >{connection.database} / {workspace.schema || session.navSchema}{#if selected}
               · {selected.columns.length} columns{/if}</span
           >
           <span class="tab-spacer"></span>
@@ -882,7 +1219,7 @@
         <div class="workspace-footnote">
           <LockKeyhole size={12} />{isSample
             ? 'Sample data is generated in this app. No database is connected.'
-            : `Direct connection to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : 'Local loopback, unencrypted'} · Session-only credentials`}
+            : `Direct connection to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : connection.tls === 'require' ? 'TLS · certificate not verified' : 'Local loopback, unencrypted'} · ${session.saved?.hasPassword ? 'System password store' : 'Session-only password'}`}
         </div>
       {:else if page === 'overview'}
         <div class="page-heading">
@@ -991,13 +1328,15 @@
           </article>
           <article class="detail-card">
             <ShieldCheck size={22} />
-            <h3>Session-only storage</h3>
+            <h3>Local connection storage</h3>
             <p>
-              Credentials, query text and results are held in memory. This preview does not save
-              connections, history or result caches to disk. Only appearance and update preferences
-              are stored locally.
+              Active sessions, query text and results are held in memory. The app does not save
+              query history or result caches to disk. Saved connection settings and table tab
+              identities stay in the local app data folder; passwords are saved only when selected,
+              in the operating system password store. Appearance and update preferences are stored
+              locally.
             </p>
-            <span class="badge">Database persistence off</span>
+            <span class="badge">No query/result persistence</span>
           </article>
           <article class="detail-card">
             <CircleHelp size={22} />
@@ -1025,13 +1364,15 @@
                 ? 'Not applicable'
                 : connection.tls === 'verifyFull'
                   ? 'Verified TLS, minimum TLS 1.2'
-                  : 'Unencrypted · literal loopback IP only'}
+                  : connection.tls === 'require'
+                    ? 'Encrypted TLS, minimum TLS 1.2 · certificate not verified'
+                    : 'Unencrypted · literal loopback IP only'}
             </dd>
             <dt>Reader</dt>
             <dd>{isSample ? 'Not applicable' : connection.username}</dd>
           </dl>
           {#if !isSample}<button class="secondary-button" onclick={disconnect} disabled={busy}
-              ><Unplug size={15} />Disconnect and forget credentials</button
+              ><Unplug size={15} />Disconnect this session</button
             >{/if}
         </div>
       {:else}
@@ -1062,7 +1403,7 @@
       <span
         ><span class="tiny-dot"></span>{isSample
           ? 'Sample mode · offline'
-          : `${engineName} · direct session`}</span
+          : `${engineName} · ${session.online ? 'session ready' : 'disconnected'}`}</span
       ><span
         >{desktopAvailable ? 'Desktop' : 'Browser preview'}<span class="footer-separator">·</span
         >All results stay in this app</span
@@ -1072,10 +1413,26 @@
 </div>
 {#if showConnection}<ConnectionDialog
     onconnected={connected}
+    initial={connectionInitial}
     onclose={() => (showConnection = false)}
   />{/if}
 
-<UpdateNotice blocked={busy || anyDirty || showConnection} bind:installing={updating} />
+{#if showManager}<ConnectionManager
+    {entries}
+    {activeKey}
+    {busy}
+    onselect={switchConnection}
+    onreconnect={reconnect}
+    onadd={openConnection}
+    onedit={editConnection}
+    onpin={pinConnection}
+    onremove={removeConnection}
+    onclose={() => (showManager = false)}
+  />{/if}
+<UpdateNotice
+  blocked={busy || anyDirty || showConnection || showManager}
+  bind:installing={updating}
+/>
 
 <svelte:window onkeydown={handleShortcut} />
 {#if closeTarget}<ConfirmClose

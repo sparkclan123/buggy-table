@@ -4,23 +4,32 @@ use table_por::{models::*, service::Workbench};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
+fn fixture_port() -> u16 {
+    std::env::var("BUGGY_TEST_POSTGRES_PORT")
+        .unwrap_or_else(|_| "15432".into())
+        .parse()
+        .expect("valid fixture port")
+}
+
 fn request() -> ConnectRequest {
     ConnectRequest {
         engine: Engine::Postgres,
         name: "Test reader".into(),
         host: "127.0.0.1".into(),
-        port: 15432,
+        port: fixture_port(),
         database: "tablepor_test".into(),
         username: "tablepor_reader".into(),
         password: "local-reader-only".into(),
         schema: "public".into(),
         tls: TlsMode::LocalOnly,
+        root_ca_pem: String::new(),
         manual_edits: false,
     }
 }
 
 fn query(connection_id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
         sql: sql.into(),
@@ -30,6 +39,7 @@ fn query(connection_id: &str, sql: &str) -> QueryRequest {
 
 fn browse(connection_id: &str) -> BrowseRequest {
     BrowseRequest {
+        schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: "orders".into(),
@@ -42,7 +52,7 @@ fn browse(connection_id: &str) -> BrowseRequest {
 }
 
 async fn admin() -> (tokio_postgres::Client, tokio::task::JoinHandle<()>) {
-    let (client, connection) = tokio_postgres::connect("host=127.0.0.1 port=15432 dbname=tablepor_test user=fixture_admin password=local-fixture-admin", NoTls).await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&format!("host=127.0.0.1 port={} dbname=tablepor_test user=fixture_admin password=local-fixture-admin", fixture_port()), NoTls).await.unwrap();
     (
         client,
         tokio::spawn(async move {
@@ -57,12 +67,22 @@ async fn reader_can_browse_query_inspect_and_observe() {
     let app = Workbench::default();
     let info = app.connect(request()).await.unwrap();
     assert!(info.tables.iter().any(|t| t.name == "orders"));
-    assert!(
-        !info
-            .tables
-            .iter()
-            .any(|t| ["orders_view", "rls_table", "custom_payload"].contains(&t.name.as_str()))
-    );
+    if let Ok(expected) = std::env::var("BUGGY_TEST_POSTGRES_VERSION") {
+        assert_eq!(
+            info.server_version.parse::<u32>().unwrap() / 10_000,
+            expected.parse::<u32>().unwrap(),
+            "matrix must use the requested server major"
+        );
+    }
+    assert!(!info.tables.iter().any(|t| {
+        [
+            "orders_view",
+            "rls_table",
+            "custom_payload",
+            "virtual_items",
+        ]
+        .contains(&t.name.as_str())
+    }));
     let page = app.browse(browse(&info.id)).await.unwrap();
     assert_eq!(page.rows.len(), 200);
     assert!(page.truncated);
@@ -167,7 +187,7 @@ async fn refuses_admin_accounts_and_destructive_sql() {
 #[tokio::test]
 #[ignore = "requires the disposable Compose fixture"]
 async fn server_role_denies_writes_even_without_app_policy() {
-    let (client, connection) = tokio_postgres::connect("host=127.0.0.1 port=15432 dbname=tablepor_test user=tablepor_reader password=local-reader-only", NoTls).await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&format!("host=127.0.0.1 port={} dbname=tablepor_test user=tablepor_reader password=local-reader-only", fixture_port()), NoTls).await.unwrap();
     let task = tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -311,7 +331,10 @@ async fn verified_tls_does_not_fall_back_to_plaintext() {
     let mut r = request();
     r.tls = TlsMode::VerifyFull;
     // This fixture does not provide TLS. The app must reject it, not downgrade.
-    assert_eq!(app.connect(r).await.unwrap_err().code, "CONNECTION_FAILED");
+    assert_eq!(
+        app.connect(r).await.unwrap_err().code,
+        "TLS_CONNECTION_FAILED"
+    );
 }
 
 fn editor_request() -> ConnectRequest {
@@ -324,6 +347,7 @@ fn editor_request() -> ConnectRequest {
 }
 async fn editable_rows(app: &Workbench, id: &str, table: &str) -> QueryResult {
     app.browse(BrowseRequest {
+        schema: None,
         table: table.into(),
         ..browse(id)
     })
@@ -343,6 +367,7 @@ fn edit(result: &QueryResult, index: usize, column: &str, value: Option<&str>) -
 }
 fn save(id: &str, table: &str, rows: Vec<RowChange>) -> SaveRequest {
     SaveRequest {
+        schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         table: table.into(),
@@ -719,4 +744,130 @@ async fn filters_and_sort_columns_remain_bounded_and_catalog_checked() {
     let mut r = browse(&info.id);
     r.sort_column = Some("id; DELETE FROM orders".into());
     assert_eq!(app.browse(r).await.unwrap_err().code, "POLICY_DENIED");
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn generated_and_identity_columns_are_not_editable() {
+    let app = Workbench::default();
+    let info = app.connect(editor_request()).await.unwrap();
+    let table = info
+        .tables
+        .iter()
+        .find(|t| t.name == "generated_items")
+        .unwrap();
+    for name in ["sequence", "label_copy"] {
+        assert!(
+            !table
+                .columns
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap()
+                .editable
+        );
+    }
+    assert!(
+        table
+            .columns
+            .iter()
+            .find(|c| c.name == "label")
+            .unwrap()
+            .editable
+    );
+    // Virtual columns must be excluded from both browsing and arbitrary SQL scope.
+    if info.server_version.parse::<u32>().unwrap() >= 180_000 {
+        assert!(!info.tables.iter().any(|t| t.name == "virtual_items"));
+        assert!(
+            app.query(query(&info.id, "SELECT * FROM public.virtual_items"))
+                .await
+                .is_err()
+        );
+        let mut request = browse(&info.id);
+        request.table = "virtual_items".into();
+        assert!(app.browse(request).await.is_err());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
+    let app = Workbench::default();
+    let first = app.connect(editor_request()).await.unwrap();
+    let second = app.connect(request()).await.unwrap();
+    let schemas = app.schemas(&first.id).await.unwrap();
+    assert!(schemas.contains(&"public".into()) && schemas.contains(&"audit".into()));
+    assert!(!schemas.contains(&"restricted".into()));
+    assert!(app.schema_tables(&first.id, "restricted").await.is_err());
+    assert!(
+        app.schema_tables(&first.id, "audit'; DROP SCHEMA public; --")
+            .await
+            .is_err()
+    );
+    let columns = app.schema_tables(&first.id, "audit").await.unwrap();
+    assert_eq!(columns[0].columns.len(), 2);
+    let mut browse_audit = browse(&first.id);
+    browse_audit.schema = Some("audit".into());
+    browse_audit.table = "edit_items".into();
+    let data = app.browse(browse_audit).await.unwrap();
+    assert_eq!(data.rows[0][1].as_deref(), Some("Audit only"));
+    let mut update = SaveRequest {
+        connection_id: first.id.clone(),
+        request_id: Uuid::new_v4().to_string(),
+        schema: Some("audit".into()),
+        table: "edit_items".into(),
+        rows: vec![RowChange {
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("Audit only".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("Audit edited".into()))].into(),
+        }],
+    };
+    app.save(update).await.unwrap();
+    let mut q = query(
+        &second.id,
+        "SELECT label FROM audit.edit_items WHERE id = 1",
+    );
+    q.schema = Some("audit".into());
+    assert_eq!(
+        app.query(q).await.unwrap().rows[0][0].as_deref(),
+        Some("Audit edited")
+    );
+    let public = app
+        .query(query(
+            &second.id,
+            "SELECT label FROM public.edit_items WHERE id = 1",
+        ))
+        .await
+        .unwrap();
+    assert_ne!(public.rows[0][0].as_deref(), Some("Audit edited"));
+    let mut forbidden = query(&second.id, "SELECT * FROM public.edit_items");
+    forbidden.schema = Some("audit".into());
+    assert!(app.query(forbidden).await.is_err());
+    assert!(
+        !app.indexes_in_schema(&second.id, "edit_items", Some("audit"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    update = SaveRequest {
+        connection_id: first.id.clone(),
+        request_id: Uuid::new_v4().to_string(),
+        schema: Some("audit".into()),
+        table: "edit_items".into(),
+        rows: vec![RowChange {
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("Audit edited".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("Audit only".into()))].into(),
+        }],
+    };
+    app.save(update).await.unwrap();
+    app.disconnect(&first.id).await.unwrap();
+    assert!(app.query(query(&first.id, "SELECT 1")).await.is_err());
+    assert!(app.query(query(&second.id, "SELECT 1")).await.is_ok());
+    app.disconnect(&second.id).await.unwrap();
 }

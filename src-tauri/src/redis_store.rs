@@ -39,6 +39,7 @@ async fn open(p: &RemoteProfile) -> AppResult<Database> {
             .await
             .map_err(|_| AppError::new("REDIS_CONNECTION", "Cannot reach the Redis endpoint."))?;
         let stream: Box<dyn crate::bounded_stream::Transport> = match p.tls {
+            TlsMode::Require => return Err(AppError::policy("Redis requires verified TLS.")),
             TlsMode::LocalOnly => Box::new(tcp),
             TlsMode::VerifyFull => {
                 let verifier = native_tls::TlsConnector::builder()

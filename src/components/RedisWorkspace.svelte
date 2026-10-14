@@ -1,25 +1,32 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { createRedisWorkspace, type RedisView } from '../lib/redis-workspace';
   import { api, errorMessage } from '../lib/api';
   import type { ConnectionInfo } from '../lib/types';
   let {
     connection,
     showOverview = false,
     busy = $bindable(false),
-  }: { connection: ConnectionInfo; showOverview?: boolean; busy?: boolean } = $props();
-  let pattern = $state('*');
-  let cursor = $state('0');
-  let scanned = $state(false);
-  let keys = $state<string[]>([]);
-  let selected = $state('');
-  let keyType = $state('');
-  let ttl = $state('');
-  let output = $state<unknown>(null);
-  let hasOutput = $state(false);
-  let appliedPattern = $state('*');
-  let error = $state('');
-  let elapsed = $state(0);
-  let command = $state('["PING"]');
+    view = $bindable(createRedisWorkspace()),
+  }: {
+    connection: ConnectionInfo;
+    showOverview?: boolean;
+    busy?: boolean;
+    view?: RedisView;
+  } = $props();
+  const pattern = $derived(view.pattern);
+  const cursor = $derived(view.cursor);
+  const scanned = $derived(view.scanned);
+  const keys = $derived(view.keys);
+  const selected = $derived(view.selected);
+  const keyType = $derived(view.keyType);
+  const ttl = $derived(view.ttl);
+  const output = $derived(view.output);
+  const hasOutput = $derived(view.hasOutput);
+  const appliedPattern = $derived(view.appliedPattern);
+  const error = $derived(view.error);
+  const elapsed = $derived(view.elapsed);
+  const command = $derived(view.command);
   let activeRequest = $state<string | null>(null);
   let generation = 0;
   async function read(args: string[]) {
@@ -29,12 +36,12 @@
   async function run(work: (token: number) => Promise<void>) {
     if (busy) return;
     busy = true;
-    error = '';
+    view.error = '';
     const token = ++generation;
     try {
       await work(token);
     } catch (e) {
-      if (generation === token) error = errorMessage(e);
+      if (generation === token) view.error = errorMessage(e);
     } finally {
       if (generation === token) {
         busy = false;
@@ -53,23 +60,23 @@
       const value = result.value;
       if (!Array.isArray(value) || value.length !== 2 || !Array.isArray(value[1]))
         throw new Error('Unexpected scan response.');
-      appliedPattern = pattern;
-      cursor = String(value[0]);
-      keys = [...new Set(value[1].filter((v): v is string => typeof v === 'string'))];
-      scanned = true;
-      elapsed = result.elapsedMs;
+      view.appliedPattern = pattern;
+      view.cursor = String(value[0]);
+      view.keys = [...new Set(value[1].filter((v): v is string => typeof v === 'string'))];
+      view.scanned = true;
+      view.elapsed = result.elapsedMs;
     });
   }
   async function inspect(key: string) {
     await run(async () => {
-      selected = key;
-      output = null;
-      hasOutput = false;
-      keyType = '';
-      ttl = '';
-      keyType = String((await read(['TYPE', key])).value);
+      view.selected = key;
+      view.output = null;
+      view.hasOutput = false;
+      view.keyType = '';
+      view.ttl = '';
+      view.keyType = String((await read(['TYPE', key])).value);
       const lifetime = String((await read(['TTL', key])).value);
-      ttl =
+      view.ttl =
         lifetime === '-1'
           ? 'No expiry'
           : lifetime === '-2'
@@ -88,9 +95,9 @@
                   ? ['ZRANGE', key, '0', '199']
                   : ['TYPE', key];
       const result = await read(args);
-      output = result.value;
-      hasOutput = true;
-      elapsed = result.elapsedMs;
+      view.output = result.value;
+      view.hasOutput = true;
+      view.elapsed = result.elapsedMs;
     });
   }
   async function execute() {
@@ -99,16 +106,16 @@
       if (!Array.isArray(args) || !args.every((v) => typeof v === 'string'))
         throw new Error('Enter a JSON array of command arguments, for example ["GET", "my key"].');
       const result = await read(args);
-      output = result.value;
-      hasOutput = true;
-      elapsed = result.elapsedMs;
-      selected = '';
-      keyType = '';
-      ttl = '';
+      view.output = result.value;
+      view.hasOutput = true;
+      view.elapsed = result.elapsedMs;
+      view.selected = '';
+      view.keyType = '';
+      view.ttl = '';
     });
   }
   function showInfo(section: string) {
-    command = JSON.stringify(['INFO', section]);
+    view.command = JSON.stringify(['INFO', section]);
     void execute();
   }
   async function cancel() {
@@ -127,7 +134,7 @@
   }
   onMount(() => {
     if (showOverview) showInfo('server');
-    else void scan(true);
+    else if (!view.scanned) void scan(true);
     return () => {
       generation++;
       void cancel();
@@ -153,7 +160,7 @@
       <label
         >Key pattern <input
           aria-label="Redis key pattern"
-          bind:value={pattern}
+          bind:value={view.pattern}
           maxlength="4096"
           disabled={busy}
         /></label
@@ -211,7 +218,7 @@
     <label
       >Read command · JSON arguments<input
         aria-label="Redis command"
-        bind:value={command}
+        bind:value={view.command}
         maxlength="32768"
         spellcheck="false"
       /></label
