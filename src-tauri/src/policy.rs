@@ -105,7 +105,11 @@ fn approve_dialect(
         Some(
             tables
                 .iter()
-                .find(|t| t.schema == identifier(parts[0]) && t.name == identifier(parts[1]))
+                .find(|t| {
+                    t.read_blocked_reason.is_none()
+                        && t.schema == identifier(parts[0])
+                        && t.name == identifier(parts[1])
+                })
                 .ok_or_else(|| {
                     AppError::policy("This table is outside the approved base-table scope.")
                 })?,
@@ -290,12 +294,15 @@ mod tests {
 
     fn tables() -> Vec<TableInfo> {
         vec![TableInfo {
+            relation_kind: "table".into(),
+            read_blocked_reason: None,
             schema: "public".into(),
             name: "orders".into(),
             estimated_rows: None,
             columns: ["id", "name", "total"]
                 .iter()
                 .map(|name| ColumnInfo {
+                    type_schema: "pg_catalog".into(),
                     name: (*name).into(),
                     data_type: "text".into(),
                     nullable: true,

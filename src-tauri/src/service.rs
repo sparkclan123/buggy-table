@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tokio::sync::{RwLock, watch};
@@ -228,6 +228,7 @@ impl Workbench {
     }
 
     async fn run(&self, operation: Operation) -> AppResult<QueryResult> {
+        let started = Instant::now();
         let (connection_id, request_id) = match &operation {
             Operation::Sql(r) => (&r.connection_id, &r.request_id),
             Operation::Browse(r) => (&r.connection_id, &r.request_id),
@@ -247,10 +248,12 @@ impl Workbench {
             .await;
         }
         let profile = profile.postgres()?;
+        let connecting = Instant::now();
         let db = tokio::select! {
             result = profile.open() => result?,
             _ = async { let _ = cancelled.wait_for(|value| *value).await; } => return Err(AppError::new("CANCELLED", "Connection attempt cancelled.")),
         };
+        let connection_ms = connecting.elapsed().as_millis() as u64;
         let work = async {
             match &operation {
                 Operation::Sql(r) => {
@@ -263,18 +266,26 @@ impl Workbench {
                     .await
                 }
                 Operation::Browse(r) => {
+                    let validating = Instant::now();
                     db.preflight().await?;
                     let tables = db
-                        .tables(r.schema.as_deref().unwrap_or(&profile.schema))
+                        .approved_tables(r.schema.as_deref().unwrap_or(&profile.schema))
                         .await?;
                     let table = tables.iter().find(|t| t.name == r.table)
                         .ok_or_else(|| AppError::policy("This table is no longer in the approved scope. Reconnect to refresh the schema."))?;
-                    db.browse(table, r).await
+                    let validation_ms = validating.elapsed().as_millis() as u64;
+                    let mut result = db.browse(table, r).await?;
+                    result.timings = Some(QueryTimings {
+                        connection_ms: 0,
+                        validation_ms,
+                        execution_ms: result.elapsed_ms,
+                    });
+                    Ok(result)
                 }
             }
         };
         let mut stop = cancelled.clone();
-        tokio::select! {
+        let mut result = tokio::select! {
             result = work => result,
             _ = async { let _ = stop.wait_for(|value| *value).await; } => {
                 db.stop().await;
@@ -284,7 +295,12 @@ impl Workbench {
                 db.stop().await;
                 Err(AppError::new("TIMEOUT", "Operation exceeded 15 seconds; cancellation requested and connection closed."))
             },
+        }?;
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Some(timings) = &mut result.timings {
+            timings.connection_ms = connection_ms;
         }
+        Ok(result)
     }
 
     pub async fn indexes(
@@ -314,7 +330,7 @@ impl Workbench {
                 let db = profile.open().await?;
                 db.preflight().await?;
                 let schema = schema.unwrap_or(&profile.schema);
-                let tables = db.tables(schema).await?;
+                let tables = db.approved_tables(schema).await?;
                 if !tables.iter().any(|t| t.name == table_name) {
                     return Err(AppError::policy("Table is outside the approved scope."));
                 }

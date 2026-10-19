@@ -52,6 +52,49 @@ async function connections(page: Page, restoreTabs = false) {
           { name: 'label', dataType: 'text', nullable: false, primaryKey: false, editable: true },
         ],
       },
+      {
+        schema,
+        name: 'json_items',
+        estimatedRows: 1,
+        columns: [
+          {
+            name: 'payload',
+            dataType: 'jsonb',
+            nullable: true,
+            primaryKey: false,
+            editable: false,
+          },
+        ],
+      },
+      {
+        schema,
+        name: 'report_view',
+        estimatedRows: null,
+        relationKind: 'view',
+        readBlockedReason:
+          'View definitions are available for structure inspection. Reading is not enabled.',
+        columns: [
+          { name: 'label', dataType: 'text', nullable: true, primaryKey: false, editable: false },
+        ],
+      },
+      ...(target.extraTable
+        ? [
+            {
+              schema,
+              name: 'new_table',
+              estimatedRows: 0,
+              columns: [
+                {
+                  name: 'id',
+                  dataType: 'int8',
+                  nullable: false,
+                  primaryKey: true,
+                  editable: false,
+                },
+              ],
+            },
+          ]
+        : []),
     ];
     const connected = (p: (typeof profiles)[number]) => ({
       profile: p,
@@ -92,7 +135,7 @@ async function connections(page: Page, restoreTabs = false) {
         }
         if (command === 'list_schemas') return ['public', 'audit'];
         if (command === 'schema_tables') return tables(String(payload.schema));
-        if (command === 'browse_table')
+        if (command === 'browse_table' || command === 'run_query')
           return {
             columns: ['id', 'label'],
             rows: [
@@ -102,7 +145,8 @@ async function connections(page: Page, restoreTabs = false) {
               ],
             ],
             sql: 'SELECT …',
-            elapsedMs: 1,
+            elapsedMs: 125,
+            timings: { connectionMs: 80, validationMs: 40, executionMs: 5 },
             truncated: false,
           };
         if (command === 'save_table_changes') {
@@ -144,6 +188,48 @@ async function start(page: Page) {
   await page.getByRole('button', { name: 'Reconnect Alpha', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'items TABLE' })).toBeVisible();
 }
+
+test('PostgreSQL result time includes connection and validation in both data and SQL views', async ({
+  page,
+}) => {
+  await start(page);
+  const timing = page.getByText('125 ms total', { exact: true });
+  await expect(timing).toBeVisible();
+  await expect(timing).toHaveAttribute(
+    'title',
+    /Connection: 80 ms.*Checks and schema: 40 ms.*Query and transfer: 5 ms/,
+  );
+  await page.getByRole('tab', { name: 'SQL editor', exact: true }).click();
+  await page.getByRole('button', { name: 'Run query', exact: true }).click();
+  await expect(timing).toBeVisible();
+  await expect(timing).toHaveAttribute('title', /excludes UI rendering/);
+});
+
+test('schema lists JSON tables and restricted views, and refresh discovers new tables without losing drafts', async ({
+  page,
+}) => {
+  await start(page);
+  await expect(page.getByRole('button', { name: 'json_items', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'report_view', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Structure', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('status')).toContainText('structure inspection');
+  await expect(page.getByRole('tab', { name: 'Data', exact: true })).toBeDisabled();
+  await page.getByRole('tab', { name: 'items', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit row 1 label', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Cell value row 1 label' }).fill('keep draft');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).extraTable = true;
+  });
+  await page.getByRole('button', { name: 'Refresh schema', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'new_table', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit row 1 label', exact: true })).toHaveText(
+    'keep draft',
+  );
+});
 
 test('saved profiles load offline; search finds distant connections without connecting', async ({
   page,

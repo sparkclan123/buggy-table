@@ -74,16 +74,26 @@ async fn reader_can_browse_query_inspect_and_observe() {
             "matrix must use the requested server major"
         );
     }
-    assert!(!info.tables.iter().any(|t| {
-        [
-            "orders_view",
-            "rls_table",
-            "custom_payload",
-            "virtual_items",
-        ]
-        .contains(&t.name.as_str())
-    }));
+    for name in ["orders_view", "rls_table"] {
+        assert!(
+            info.tables
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .read_blocked_reason
+                .is_some()
+        );
+    }
+    assert!(
+        info.tables
+            .iter()
+            .find(|t| t.name == "custom_payload")
+            .unwrap()
+            .read_blocked_reason
+            .is_none()
+    );
     let page = app.browse(browse(&info.id)).await.unwrap();
+    assert_total_timings(&page);
     assert_eq!(page.rows.len(), 200);
     assert!(page.truncated);
     assert_eq!(page.rows[0][0].as_deref(), Some("1"));
@@ -99,6 +109,7 @@ async fn reader_can_browse_query_inspect_and_observe() {
         .await
         .unwrap();
     assert_eq!(data.rows.len(), 5);
+    assert_total_timings(&data);
     let mut explain = query(&info.id, "SELECT * FROM public.orders WHERE id = 1");
     explain.explain = true;
     let plan = app.query(explain).await.unwrap();
@@ -122,6 +133,368 @@ async fn reader_can_browse_query_inspect_and_observe() {
             .code,
         "NOT_CONNECTED"
     );
+}
+
+fn assert_total_timings(result: &QueryResult) {
+    let timing = result.timings.as_ref().expect("PostgreSQL stage timings");
+    assert!(result.elapsed_ms >= timing.connection_ms + timing.validation_ms + timing.execution_ms);
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn schema_catalog_above_the_old_500_table_limit_is_complete() {
+    let (admin, task) = admin().await;
+    let schema = format!("large_{}", Uuid::new_v4().simple());
+    let mut ddl =
+        format!("CREATE SCHEMA {schema}; GRANT USAGE ON SCHEMA {schema} TO tablepor_reader;");
+    for index in 0..520 {
+        ddl.push_str(&format!(
+            "CREATE TABLE {schema}.table_{index:03} (id integer);"
+        ));
+    }
+    ddl.push_str(&format!(
+        "GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO tablepor_reader;"
+    ));
+    admin.batch_execute(&ddl).await.unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.schema = schema.clone();
+    let info = app.connect(settings).await.unwrap();
+    assert_eq!(info.tables.len(), 520);
+    assert_eq!(info.tables.last().unwrap().name, "table_519");
+    assert!(
+        info.tables
+            .iter()
+            .all(|t| t.columns.len() == 1 && t.read_blocked_reason.is_none())
+    );
+    let data = app
+        .query(query(
+            &info.id,
+            &format!("SELECT id FROM {schema}.table_519"),
+        ))
+        .await
+        .unwrap();
+    assert!(data.rows.is_empty());
+    assert_eq!(data.columns, ["id"]);
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn json_arrays_and_enums_are_discovered_filtered_and_saved_without_losing_values() {
+    let (admin, task) = admin().await;
+    let schema = format!("rich_{}", Uuid::new_v4().simple());
+    admin
+        .batch_execute(&format!(
+            r#"
+        CREATE SCHEMA {schema};
+        GRANT USAGE ON SCHEMA {schema} TO tablepor_reader, tablepor_editor;
+        CREATE TYPE {schema}."state kind" AS ENUM ('new', 'done', 'O''Reilly');
+        CREATE TABLE {schema}.rich (
+          id bigint PRIMARY KEY, doc json, indexed_doc jsonb, tags text[], nums bigint[],
+          state {schema}."state kind", states {schema}."state kind"[], docs json[], label text);
+        INSERT INTO {schema}.rich VALUES (1, '{{"a":1, "a":2}}', '{{"a":2}}',
+          ARRAY['one','two'], ARRAY[9007199254740993], 'new', ARRAY['new']::{schema}."state kind"[],
+          ARRAY['{{"b": 1}}']::json[], 'original');
+        CREATE VIEW {schema}.rich_view AS SELECT * FROM {schema}.rich;
+        CREATE MATERIALIZED VIEW {schema}.rich_snapshot AS SELECT * FROM {schema}.rich;
+        CREATE DOMAIN {schema}.custom_domain AS text CHECK (VALUE <> '');
+        CREATE TABLE {schema}.domain_table (value {schema}.custom_domain);
+        GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO tablepor_reader, tablepor_editor;
+        GRANT UPDATE ON {schema}.rich TO tablepor_editor;
+    "#
+        ))
+        .await
+        .unwrap();
+    let app = Workbench::default();
+    let mut settings = editor_request();
+    settings.schema = schema.clone();
+    let info = app.connect(settings).await.unwrap();
+    assert_eq!(info.tables.len(), 4);
+    assert!(
+        info.tables
+            .iter()
+            .find(|t| t.name == "rich")
+            .unwrap()
+            .read_blocked_reason
+            .is_none()
+    );
+    assert!(
+        info.tables
+            .iter()
+            .find(|t| t.name == "rich_view")
+            .unwrap()
+            .read_blocked_reason
+            .is_some()
+    );
+    assert!(
+        info.tables
+            .iter()
+            .find(|t| t.name == "domain_table")
+            .unwrap()
+            .read_blocked_reason
+            .is_some()
+    );
+    let original = editable_rows(&app, &info.id, "rich").await;
+    assert_eq!(original.rows[0][1].as_deref(), Some("{\"a\":1, \"a\":2}"));
+    assert_eq!(original.rows[0][4].as_deref(), Some("{9007199254740993}"));
+    let sql = app
+        .query(query(&info.id, &format!("SELECT * FROM {schema}.rich")))
+        .await
+        .unwrap();
+    assert_eq!(sql.rows, original.rows);
+    assert_eq!(
+        editable_rows(&app, &info.id, "rich_snapshot").await.rows,
+        original.rows
+    );
+    for (column, value) in [
+        ("doc", "{\"a\":1, \"a\":2}"),
+        ("tags", "{one,two}"),
+        ("state", "new"),
+        ("states", "{new}"),
+        ("indexed_doc", "{\"a\": 2}"),
+    ] {
+        let mut filtered = browse(&info.id);
+        filtered.table = "rich".into();
+        filtered.filters = vec![Filter {
+            column: column.into(),
+            value: value.into(),
+            operator: FilterOperator::Equals,
+        }];
+        assert_eq!(
+            app.browse(filtered).await.unwrap().rows.len(),
+            1,
+            "filter {column}"
+        );
+    }
+    let mut change = edit(&original, 0, "label", Some("saved"));
+    change.changes.extend([
+        ("doc".into(), Some("{\"changed\": true}".into())),
+        ("indexed_doc".into(), Some("{\"changed\": true}".into())),
+        ("tags".into(), Some("{three,four}".into())),
+        ("state".into(), Some("O'Reilly".into())),
+        ("states".into(), Some("{done,new}".into())),
+    ]);
+    app.save(save(&info.id, "rich", vec![change]))
+        .await
+        .unwrap();
+    let saved = editable_rows(&app, &info.id, "rich").await;
+    assert_eq!(saved.rows[0][1].as_deref(), Some("{\"changed\": true}"));
+    assert_eq!(saved.rows[0][5].as_deref(), Some("O'Reilly"));
+    assert_eq!(saved.rows[0][6].as_deref(), Some("{done,new}"));
+    // JSON conflict detection must notice textual changes as well as values.
+    admin
+        .batch_execute(&format!(
+            "UPDATE {schema}.rich SET doc = '{{\"changed\":true}}'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        app.save(save(
+            &info.id,
+            "rich",
+            vec![edit(&saved, 0, "label", Some("stale"))]
+        ))
+        .await
+        .unwrap_err()
+        .code,
+        "EDIT_CONFLICT"
+    );
+    let fresh = editable_rows(&app, &info.id, "rich").await;
+    assert!(
+        app.save(save(
+            &info.id,
+            "rich",
+            vec![edit(&fresh, 0, "doc", Some("invalid JSON"))]
+        ))
+        .await
+        .is_err()
+    );
+    assert_eq!(editable_rows(&app, &info.id, "rich").await.rows, fresh.rows);
+    app.disconnect(&info.id).await.unwrap();
+    // A normal strict reader can read the same newly supported types.
+    let mut settings = request();
+    settings.schema = schema.clone();
+    let reader = app.connect(settings).await.unwrap();
+    assert_eq!(
+        editable_rows(&app, &reader.id, "rich").await.rows,
+        fresh.rows
+    );
+    app.disconnect(&reader.id).await.unwrap();
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn result_limits_keep_payload_bounded_and_allow_next_operation() {
+    let (admin, task) = admin().await;
+    let schema = format!("limits_{}", Uuid::new_v4().simple());
+    admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema}; GRANT USAGE ON SCHEMA {schema} TO tablepor_reader;
+         CREATE TABLE {schema}.wide_rows (id integer PRIMARY KEY, payload text);
+         INSERT INTO {schema}.wide_rows SELECT i, repeat('x', 2097152) FROM generate_series(1,3) i;
+         CREATE TABLE {schema}.many_rows (id integer PRIMARY KEY);
+         INSERT INTO {schema}.many_rows SELECT i FROM generate_series(1,1200) i;
+         GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO tablepor_reader;"
+        ))
+        .await
+        .unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.schema = schema.clone();
+    let info = app.connect(settings).await.unwrap();
+    let mut page_request = browse(&info.id);
+    page_request.table = "wide_rows".into();
+    let page = app.browse(page_request).await.unwrap();
+    assert!(page.truncated);
+    assert_eq!(page.rows.len(), 1);
+    let data = app
+        .query(query(
+            &info.id,
+            &format!("SELECT * FROM {schema}.wide_rows ORDER BY id"),
+        ))
+        .await
+        .unwrap();
+    assert!(data.truncated);
+    assert_eq!(data.rows.len(), 1);
+    let data = app
+        .query(query(
+            &info.id,
+            &format!("SELECT id FROM {schema}.many_rows ORDER BY id"),
+        ))
+        .await
+        .unwrap();
+    assert!(data.truncated);
+    assert_eq!(data.rows.len(), 1000);
+    let again = app.query(query(&info.id, "SELECT 1")).await.unwrap();
+    assert_eq!(again.rows[0][0].as_deref(), Some("1"));
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn batched_catalog_keeps_table_columns_permissions_and_scope_separate() {
+    let (admin, task) = admin().await;
+    let schema = format!("catalog_{}", Uuid::new_v4().simple());
+    admin.batch_execute(&format!(
+        "CREATE SCHEMA {schema};
+         GRANT USAGE ON SCHEMA {schema} TO tablepor_editor;
+         CREATE TABLE {schema}.zeta (tenant integer, id bigint, dropped text, amount numeric(30,10), PRIMARY KEY(tenant,id));
+         ALTER TABLE {schema}.zeta DROP COLUMN dropped;
+         CREATE TABLE {schema}.alpha (id bigint PRIMARY KEY, label text NOT NULL, copied text GENERATED ALWAYS AS (label) STORED);
+         CREATE TABLE {schema}.empty_table ();
+         CREATE TYPE {schema}.custom_record AS (value text);
+         CREATE TABLE {schema}.blocked (id bigint, payload {schema}.custom_record);
+         GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO tablepor_editor;
+         GRANT UPDATE(label) ON {schema}.alpha TO tablepor_editor;
+         GRANT UPDATE(amount) ON {schema}.zeta TO tablepor_editor;"
+    )).await.unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.schema = schema.clone();
+    settings.username = "tablepor_editor".into();
+    settings.password = "local-editor-only".into();
+    settings.manual_edits = true;
+    let info = app.connect(settings).await.unwrap();
+    assert_eq!(
+        info.tables
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "blocked", "empty_table", "zeta"]
+    );
+    let alpha = &info.tables[0];
+    assert_eq!(
+        alpha
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["id", "label", "copied"]
+    );
+    assert!(alpha.columns[0].primary_key && !alpha.columns[0].editable);
+    assert!(alpha.columns[1].editable && !alpha.columns[1].nullable);
+    assert!(!alpha.columns[2].editable);
+    assert!(info.tables[1].read_blocked_reason.is_some());
+    assert!(info.tables[2].columns.is_empty());
+    let zeta = &info.tables[3];
+    assert_eq!(
+        zeta.columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["tenant", "id", "amount"]
+    );
+    assert!(zeta.columns[0].primary_key && zeta.columns[1].primary_key);
+    assert!(zeta.columns[2].editable && zeta.columns[2].data_type == "numeric");
+
+    // Fresh catalog data must observe grant and DDL changes without reconnecting.
+    admin
+        .batch_execute(&format!(
+            "REVOKE UPDATE(label) ON {schema}.alpha FROM tablepor_editor;
+         ALTER TABLE {schema}.zeta ADD COLUMN note text;
+         ALTER TABLE {schema}.alpha ENABLE ROW LEVEL SECURITY;"
+        ))
+        .await
+        .unwrap();
+    let refreshed = app.schema_tables(&info.id, &schema).await.unwrap();
+    assert!(
+        refreshed
+            .iter()
+            .find(|t| t.name == "alpha")
+            .unwrap()
+            .read_blocked_reason
+            .is_some()
+    );
+    assert_eq!(
+        refreshed
+            .iter()
+            .find(|t| t.name == "zeta")
+            .unwrap()
+            .columns
+            .last()
+            .unwrap()
+            .name,
+        "note"
+    );
+    assert_eq!(
+        app.query(query(&info.id, &format!("SELECT * FROM {schema}.alpha")))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    admin
+        .batch_execute(&format!(
+            "REVOKE USAGE ON SCHEMA {schema} FROM tablepor_editor"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        app.schema_tables(&info.id, &schema).await.unwrap_err().code,
+        "SCHEMA_UNAVAILABLE"
+    );
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    task.abort();
 }
 
 #[tokio::test]
@@ -776,7 +1149,14 @@ async fn generated_and_identity_columns_are_not_editable() {
     );
     // Virtual columns must be excluded from both browsing and arbitrary SQL scope.
     if info.server_version.parse::<u32>().unwrap() >= 180_000 {
-        assert!(!info.tables.iter().any(|t| t.name == "virtual_items"));
+        assert!(
+            info.tables
+                .iter()
+                .find(|t| t.name == "virtual_items")
+                .unwrap()
+                .read_blocked_reason
+                .is_some()
+        );
         assert!(
             app.query(query(&info.id, "SELECT * FROM public.virtual_items"))
                 .await

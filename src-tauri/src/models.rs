@@ -72,6 +72,8 @@ pub enum TlsMode {
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
+    #[serde(default = "catalog_namespace")]
+    pub type_schema: String,
     pub nullable: bool,
     pub primary_key: bool,
     #[serde(default)]
@@ -85,6 +87,14 @@ pub struct TableInfo {
     pub name: String,
     pub columns: Vec<ColumnInfo>,
     pub estimated_rows: Option<i64>,
+    #[serde(default)]
+    pub relation_kind: String,
+    #[serde(default)]
+    pub read_blocked_reason: Option<String>,
+}
+
+fn catalog_namespace() -> String {
+    "pg_catalog".into()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,8 +133,19 @@ pub struct QueryResult {
     // Text preserves PostgreSQL decimals, bigint and timestamps without JS rounding.
     pub rows: Vec<Vec<Option<String>>>,
     pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<QueryTimings>,
     pub truncated: bool,
     pub sql: String,
+}
+
+/// PostgreSQL operation timings, excluding IPC serialization and UI rendering.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryTimings {
+    pub connection_ms: u64,
+    pub validation_ms: u64,
+    pub execution_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

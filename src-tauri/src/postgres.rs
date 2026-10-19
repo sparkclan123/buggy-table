@@ -1,5 +1,6 @@
 //! PostgreSQL transport and fixed catalog queries. No UI code or generic shell access.
 use std::{
+    collections::HashMap,
     error::Error as _,
     io::ErrorKind,
     net::IpAddr,
@@ -10,7 +11,7 @@ use futures_util::{TryStreamExt, pin_mut};
 use native_tls::{Certificate, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
 use tokio::{sync::watch, task::JoinHandle, time::timeout};
-use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage, config::SslMode};
+use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage, config::SslMode, types::Type};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -313,6 +314,49 @@ pub(crate) fn query_error(error: tokio_postgres::Error) -> AppError {
 }
 
 // No upper gate: future PostgreSQL releases may connect, with a UI notice until tested.
+fn supported_scalar(oid: u32) -> bool {
+    // Built-in scalar I/O only. Enums and their arrays are checked separately;
+    // domains/composites/extensions never inherit approval just by their names.
+    matches!(
+        oid,
+        16 | 17
+            | 20
+            | 21
+            | 23
+            | 25
+            | 114
+            | 650
+            | 700
+            | 701
+            | 790
+            | 829
+            | 869
+            | 1042
+            | 1043
+            | 1082
+            | 1083
+            | 1114
+            | 1184
+            | 1186
+            | 1266
+            | 1700
+            | 2950
+            | 3802
+    )
+}
+
+pub(crate) fn column_type_sql(column: &ColumnInfo) -> String {
+    format!(
+        "{}.{}",
+        quote_identifier(&column.type_schema),
+        quote_identifier(&column.data_type)
+    )
+}
+
+pub(crate) fn text_comparison(column: &ColumnInfo) -> bool {
+    column.type_schema == "pg_catalog" && matches!(column.data_type.as_str(), "json" | "_json")
+}
+
 fn validate_server_version(version: &str) -> AppResult<()> {
     if !version.parse::<u32>().is_ok_and(|v| v >= 150_000) {
         return Err(AppError::new(
@@ -326,7 +370,7 @@ fn validate_server_version(version: &str) -> AppResult<()> {
 impl Database {
     pub async fn preflight(&self) -> AppResult<String> {
         if !self.manual_edits {
-            let role = self.client.query_one(
+            let role = self.client.query_typed_one(
             "SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls AS elevated,
              EXISTS (SELECT 1 FROM pg_roles other WHERE other.oid <> me.oid AND pg_has_role(current_user, other.oid, 'MEMBER')) AS memberships,
              has_database_privilege(current_database(), 'CREATE') OR has_database_privilege(current_database(), 'TEMP') AS database_write
@@ -337,7 +381,7 @@ impl Database {
                     "Use a dedicated reader: no elevated roles, role memberships, database CREATE or TEMP privileges. See docs/DEVELOPMENT.md for the test reader setup.",
                 ));
             }
-            let unsafe_privileges = self.client.query_one(
+            let unsafe_privileges = self.client.query_typed_one(
             "SELECT
              EXISTS (SELECT 1 FROM pg_namespace WHERE has_schema_privilege(oid, 'CREATE')) OR
              EXISTS (SELECT 1 FROM pg_class c WHERE relkind IN ('r','p','v','m','f') AND c.oid <> 'pg_catalog.pg_settings'::regclass AND
@@ -356,7 +400,7 @@ impl Database {
         }
         let row = self
             .client
-            .query_one("SHOW server_version_num", &[])
+            .query_typed_one("SHOW server_version_num", &[])
             .await
             .map_err(query_error)?;
         let version: String = row.get(0);
@@ -379,7 +423,7 @@ impl Database {
         if schema.is_empty() || schema.len() > 253 || schema.contains('\0') {
             return Err(AppError::policy("Invalid schema name."));
         }
-        let accessible: bool = self.client.query_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", &[&schema]).await.map_err(query_error)?.get(0);
+        let accessible: bool = self.client.query_typed_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", &[(&schema, Type::TEXT)]).await.map_err(query_error)?.get(0);
         if !accessible {
             return Err(AppError::new(
                 "SCHEMA_UNAVAILABLE",
@@ -387,45 +431,135 @@ impl Database {
             ));
         }
 
-        // Exclude views, foreign/partitioned/inherited parents, RLS policies and
-        // custom types and virtual/unknown generated kinds; these can hide executable
-        // dependencies behind a SELECT (virtual columns were added in PostgreSQL 18).
-        let rows = self.client.query(
-            "SELECT c.oid, c.relname, c.reltuples::bigint FROM pg_class c
+        // Discovery is separate from execution policy. Show every relation in
+        // this schema, including those we can only inspect, with a clear reason.
+        let rows = self
+            .client
+            .query_typed(
+                "SELECT c.oid, c.relname, c.reltuples::bigint, c.relkind::text, c.relrowsecurity,
+               has_table_privilege(c.oid, 'SELECT'),
+               EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid)
+             FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = $1 AND c.relkind = 'r' AND NOT c.relrowsecurity
-               AND has_table_privilege(c.oid, 'SELECT')
-               AND NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid)
-               AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-                 AND (a.attgenerated NOT IN ('', 's') OR a.atttypid NOT IN (16,20,21,23,25,700,701,1042,1043,1082,1083,1114,1184,1186,1266,1700,2950)))
-             ORDER BY c.relname LIMIT 501", &[&schema]).await.map_err(query_error)?;
-        if rows.len() > 500 {
+             WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
+             ORDER BY c.relname LIMIT 5001",
+                &[(&schema, Type::TEXT)],
+            )
+            .await
+            .map_err(query_error)?;
+        if rows.len() > 5000 {
             return Err(AppError::new(
                 "SCOPE_TOO_LARGE",
-                "Choose a schema with at most 500 approved tables.",
+                "This schema exceeds 5,000 tables/views. The catalog was not partially loaded.",
             ));
         }
-        let mut tables = Vec::new();
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One bounded catalog query for every table, rather than one round trip
+        // per table. Re-read privileges and column metadata on EVERY operation;
+        // no stale permission/schema cache is involved.
+        let oids: Vec<u32> = rows.iter().map(|row| row.get(0)).collect();
+        let columns = self.client.query_typed(
+                "SELECT a.attrelid, a.attname, t.typname, NOT a.attnotnull,
+                   EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
+                   a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE'),
+                   n.nspname, t.oid, t.typtype::text, t.typelem, COALESCE(e.typtype::text, ''),
+                   t.typinput = 'pg_catalog.array_in'::regproc AND t.typoutput = 'pg_catalog.array_out'::regproc,
+                   a.attgenerated::text
+                 FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 LEFT JOIN pg_type e ON e.oid = t.typelem
+                 WHERE a.attrelid = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attrelid, a.attnum LIMIT 50001", &[(&oids, Type::OID_ARRAY)])
+                .await.map_err(query_error)?;
+        if columns.len() > 50000 {
+            return Err(AppError::new(
+                "SCOPE_TOO_LARGE",
+                "This schema exceeds 50,000 columns. The catalog was not partially loaded.",
+            ));
+        }
+        let mut by_table: HashMap<u32, Vec<ColumnInfo>> = HashMap::new();
+        let mut blocked: HashMap<u32, String> = HashMap::new();
+        for column in columns {
+            let oid: u32 = column.get(0);
+            let type_oid: u32 = column.get(7);
+            let kind: String = column.get(8);
+            let element_oid: u32 = column.get(9);
+            let element_kind: String = column.get(10);
+            let supported = supported_scalar(type_oid)
+                || kind == "e"
+                || (column.get::<_, bool>(11)
+                    && (supported_scalar(element_oid) || element_kind == "e"));
+            let generated: String = column.get(12);
+            if !supported {
+                blocked.entry(oid).or_insert_with(|| format!("Column {} uses unsupported type {}.{}. Structure is available; reading this type is not enabled.", column.get::<_, String>(1), column.get::<_, String>(6), column.get::<_, String>(2)));
+            } else if !matches!(generated.as_str(), "" | "s") {
+                blocked.entry(oid).or_insert_with(|| "Virtual generated columns can execute expressions when read. Structure is available; reading is not enabled.".into());
+            }
+            by_table.entry(column.get(0)).or_default().push(ColumnInfo {
+                name: column.get(1),
+                data_type: column.get(2),
+                type_schema: column.get(6),
+                nullable: column.get(3),
+                primary_key: column.get(4),
+                editable: self.manual_edits
+                    && column.get::<_, bool>(5)
+                    && !column.get::<_, bool>(4),
+            });
+        }
+        let mut tables = Vec::with_capacity(rows.len());
         for row in rows {
             let oid: u32 = row.get(0);
-            let columns = self.client.query(
-                "SELECT a.attname, t.typname, NOT a.attnotnull,
-                   EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
-                   a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE')
-                 FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
-                 WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum", &[&oid])
-                .await.map_err(query_error)?.into_iter().map(|c| ColumnInfo {
-                    name: c.get(0), data_type: c.get(1), nullable: c.get(2), primary_key: c.get(3), editable: self.manual_edits && c.get::<_, bool>(4) && !c.get::<_, bool>(3),
-                }).collect();
             let estimated: i64 = row.get(2);
+            let kind: String = row.get(3);
+            let relation_kind = match kind.as_str() {
+                "v" => "view",
+                "m" => "materialized view",
+                "p" => "partitioned table",
+                "f" => "foreign table",
+                _ => "table",
+            };
+            let reason = if !row.get::<_, bool>(5) {
+                Some(
+                    "This account does not have table SELECT permission. Structure is available."
+                        .into(),
+                )
+            } else if !matches!(kind.as_str(), "r" | "m") {
+                Some(format!(
+                    "This {relation_kind} is available for structure inspection. Executing view definitions, foreign scans and partition trees is not enabled."
+                ))
+            } else if row.get::<_, bool>(4) {
+                Some("Row-level security policies may execute custom expressions. Structure is available; reading is not enabled.".into())
+            } else if row.get::<_, bool>(6) {
+                Some("This table has inherited children. Structure is available; reading the inheritance tree is not enabled.".into())
+            } else {
+                blocked.remove(&oid)
+            };
+            let mut columns = by_table.remove(&oid).unwrap_or_default();
+            if reason.is_some() || kind != "r" {
+                for column in &mut columns {
+                    column.editable = false;
+                }
+            }
             tables.push(TableInfo {
                 schema: schema.into(),
                 name: row.get(1),
                 columns,
                 estimated_rows: (estimated >= 0).then_some(estimated),
+                relation_kind: relation_kind.into(),
+                read_blocked_reason: reason,
             });
         }
         Ok(tables)
+    }
+
+    pub async fn approved_tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
+        Ok(self
+            .tables(schema)
+            .await?
+            .into_iter()
+            .filter(|table| table.read_blocked_reason.is_none())
+            .collect())
     }
 
     async fn cancel(&self) -> bool {
@@ -469,6 +603,7 @@ impl Database {
                 columns: vec![],
                 rows: vec![],
                 elapsed_ms: 0,
+                timings: None,
                 truncated: false,
                 sql: sql.clone(),
             };
@@ -562,11 +697,6 @@ impl Database {
                 FilterOperator::IsNull => format!("{name} IS NULL"),
                 FilterOperator::IsNotNull => format!("{name} IS NOT NULL"),
                 FilterOperator::Contains => {
-                    if !["text", "varchar", "bpchar"].contains(&column.data_type.as_str()) {
-                        return Err(AppError::policy(
-                            "Contains is available for text columns only.",
-                        ));
-                    }
                     parameters.push(format!(
                         "%{}%",
                         filter
@@ -575,7 +705,10 @@ impl Database {
                             .replace('%', "\\%")
                             .replace('_', "\\_")
                     ));
-                    format!("{name} ILIKE ${}::pg_catalog.text", parameters.len())
+                    format!(
+                        "{name}::pg_catalog.text ILIKE ${}::pg_catalog.text",
+                        parameters.len()
+                    )
                 }
                 operator => {
                     let op = match operator {
@@ -586,11 +719,18 @@ impl Database {
                         _ => unreachable!(),
                     };
                     parameters.push(filter.value.clone());
-                    format!(
-                        "{name} {op} ${}::pg_catalog.text::pg_catalog.{}",
-                        parameters.len(),
-                        quote_identifier(&column.data_type)
-                    )
+                    if text_comparison(column) {
+                        format!(
+                            "{name}::pg_catalog.text {op} ${}::pg_catalog.text",
+                            parameters.len()
+                        )
+                    } else {
+                        format!(
+                            "{name} {op} ${}::pg_catalog.text::{}",
+                            parameters.len(),
+                            column_type_sql(column)
+                        )
+                    }
                 }
             };
             conditions.push(condition);
@@ -624,12 +764,20 @@ impl Database {
                 " ORDER BY {}",
                 order
                     .iter()
-                    .map(|name| format!(
-                        "{}.{} {} NULLS LAST",
-                        quote_identifier(&table.name),
-                        quote_identifier(name),
-                        if request.descending { "DESC" } else { "ASC" }
-                    ))
+                    .map(|name| {
+                        let column = find_column(name).expect("sort columns were validated");
+                        format!(
+                            "{}.{}{} {} NULLS LAST",
+                            quote_identifier(&table.name),
+                            quote_identifier(name),
+                            if text_comparison(column) {
+                                "::pg_catalog.text"
+                            } else {
+                                ""
+                            },
+                            if request.descending { "DESC" } else { "ASC" }
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -639,14 +787,14 @@ impl Database {
             PAGE_SIZE + 1,
             request.page as usize * PAGE_SIZE
         ));
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = parameters
+        let params: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), Type)> = parameters
             .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+            .map(|p| (p as &(dyn tokio_postgres::types::ToSql + Sync), Type::TEXT))
             .collect();
         let started = Instant::now();
         let stream = self
             .client
-            .query_raw(&sql, params)
+            .query_typed_raw(&sql, params)
             .await
             .map_err(query_error)?;
         pin_mut!(stream);
@@ -654,11 +802,19 @@ impl Database {
             columns: table.columns.iter().map(|c| c.name.clone()).collect(),
             rows: vec![],
             elapsed_ms: 0,
+            timings: None,
             truncated: false,
             sql,
         };
         let mut bytes = 0;
         while let Some(row) = stream.try_next().await.map_err(query_error)? {
+            if result.rows.len() == PAGE_SIZE {
+                // LIMIT PAGE_SIZE + 1 already bounds this read. The extra row
+                // only signals another page; don't open a separate cancellation
+                // connection (and TLS handshake) for an already bounded query.
+                result.truncated = true;
+                break;
+            }
             let values = (0..row.len())
                 .map(|i| row.try_get::<_, Option<String>>(i))
                 .collect::<Result<Vec<_>, _>>()
@@ -667,7 +823,7 @@ impl Database {
                 .iter()
                 .map(|v| v.as_ref().map_or(4, String::len))
                 .sum::<usize>();
-            if result.rows.len() == PAGE_SIZE || bytes > MAX_RESULT_BYTES {
+            if bytes > MAX_RESULT_BYTES {
                 result.truncated = true;
                 let _ = self.cancel().await;
                 break;
@@ -719,10 +875,18 @@ impl Database {
         explain: bool,
         cancelled: watch::Receiver<bool>,
     ) -> AppResult<QueryResult> {
+        let started = Instant::now();
         self.preflight().await?;
-        let tables = self.tables(schema).await?;
+        let tables = self.approved_tables(schema).await?;
         let approved = policy::approve(sql, &tables)?;
-        self.execute(approved.sql(), explain, cancelled).await
+        let validation_ms = started.elapsed().as_millis() as u64;
+        let mut result = self.execute(approved.sql(), explain, cancelled).await?;
+        result.timings = Some(QueryTimings {
+            connection_ms: 0,
+            validation_ms,
+            execution_ms: result.elapsed_ms,
+        });
+        Ok(result)
     }
 
     pub async fn stop(&self) {

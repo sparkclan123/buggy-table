@@ -33,8 +33,10 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 
 - จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
 - สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
+- PostgreSQL แสดงรายชื่อ tables/views ใน schema พร้อมเหตุผลสำหรับรายการที่อ่านไม่ได้; รองรับ JSON/JSONB, enum และ array ของชนิดที่รองรับ รวมถึงอ่าน materialized views และมีปุ่ม Refresh schema
+- อ่าน catalog เป็นชุดแทนการส่งคำสั่งแยกทุกตาราง เพื่อลดเวลารอเซิร์ฟเวอร์ภายนอก; เวลา PostgreSQL แสดงผลรวมพร้อมรายละเอียด connection/checks/query เมื่อชี้ที่ตัวเลข
 
-**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, SSH, query history, joins/CTEs/functions/casts, views/RLS/custom types และการรับรองใช้งาน production
+**ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, SSH, query history, joins/CTEs/functions/casts และการรับรองใช้งาน production; PostgreSQL views/RLS/foreign tables/partitioned parents/virtual generated columns และชนิด domain/composite/extension แสดงโครงสร้างพร้อมเหตุผล แต่ยังอ่านข้อมูลไม่ได้ ส่วน materialized views อ่านได้
 
 ## เริ่มรัน
 

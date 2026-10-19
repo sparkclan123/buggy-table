@@ -16,6 +16,7 @@ export interface ConnectRequest {
 export interface ColumnInfo {
   name: string;
   dataType: string;
+  typeSchema?: string;
   nullable: boolean;
   primaryKey: boolean;
   editable: boolean;
@@ -25,6 +26,8 @@ export interface TableInfo {
   name: string;
   columns: ColumnInfo[];
   estimatedRows: number | null;
+  relationKind?: string;
+  readBlockedReason?: string | null;
 }
 export interface ConnectionInfo {
   engine: Engine;
@@ -44,6 +47,7 @@ export interface QueryResult {
   columns: string[];
   rows: (string | null)[][];
   elapsedMs: number;
+  timings?: { connectionMs: number; validationMs: number; executionMs: number };
   truncated: boolean;
   sql: string;
 }

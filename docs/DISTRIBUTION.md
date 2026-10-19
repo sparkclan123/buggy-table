@@ -26,14 +26,14 @@ Ad-hoc แก้ความสมบูรณ์ของลายเซ็น 
 
 ## โครงสร้างที่เตรียมให้
 
-- ซอร์ส: `sparkclan123/buggy-table` (ตรวจล่าสุดเป็น **private**)
+- ซอร์ส: `sparkclan123/buggy-table` (ตรวจเมื่อ 19 ตุลาคม 2026 เป็น **public**)
 - ไฟล์แจก: https://github.com/sparkclan123/buggy-table-releases
 - macOS Apple Silicon → `.dmg` / updater `.app.tar.gz`
 - macOS Intel → `.dmg` / updater `.app.tar.gz` คนละไฟล์กับ ARM
 - Windows x64 → NSIS `.exe` ใช้ทั้งติดตั้งครั้งแรกและอัปเดต
 - `latest.json` มีเวอร์ชัน URL และ signature ของทั้งสามแพลตฟอร์ม; `SHA256SUMS.txt` สำหรับตรวจไฟล์เอง
 
-ซอร์สเป็น private และ repo แจกไฟล์เป็น public ผู้ใช้จึงดาวน์โหลดได้โดยไม่ต้องใช้ token แอปไม่มี GitHub token ฝังอยู่ การเปลี่ยน repo เป็น private ภายหลังไม่ลบสำเนาที่ผู้อื่นดาวน์โหลดไปแล้ว
+repo แจกไฟล์เป็น public ผู้ใช้จึงดาวน์โหลดได้โดยไม่ต้องใช้ token แอปไม่มี GitHub token ฝังอยู่ การเปลี่ยน repo เป็น private ภายหลังไม่ลบสำเนาที่ผู้อื่นดาวน์โหลดไปแล้ว
 
 ## ประสบการณ์ผู้ใช้
 

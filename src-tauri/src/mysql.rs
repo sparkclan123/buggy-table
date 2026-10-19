@@ -144,6 +144,8 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
                 ));
             }
             tables.push(TableInfo {
+                relation_kind: "table".into(),
+                read_blocked_reason: None,
                 schema: schema.into(),
                 name,
                 estimated_rows: row
@@ -154,6 +156,7 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
             });
         }
         tables.last_mut().unwrap().columns.push(ColumnInfo {
+            type_schema: String::new(),
             name: row.get(2).unwrap_or_default(),
             data_type: ty,
             nullable: row.get::<String, _>(4).is_some_and(|v| v == "YES"),
@@ -318,6 +321,7 @@ async fn read(
         columns,
         rows,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        timings: None,
         truncated,
         sql,
     })

@@ -115,3 +115,24 @@ Public distribution: https://github.com/sparkclan123/buggy-table-releases/releas
 - GUI launch on the development Mac was inconclusive (automation timed out and a translocated process started). The exact other-machine dialog has not been reproduced on a clean Mac. Do not treat a developer-machine launch as a Gatekeeper acceptance test. No quarantine attributes were removed and no Gatekeeper settings were disabled.
 - Signed-release verification now runs syspolicy_check when available, in addition to Developer ID authority, stapler and spctl checks. Signing configuration rejects ad-hoc/development identities before building.
 - Release documentation now explicitly states that Open Anyway may be unavailable. A new signed release is blocked by the absence of Apple Developer ID credentials; rebuilding with ad-hoc signing cannot fulfill normal Mac distribution.
+
+## PostgreSQL latency and complete schema discovery — 2026-10-19
+
+The baseline at `22a14c1` reopened PostgreSQL on each operation and queried column metadata separately for every approved table. With 100 tables, catalog loading issued 102 SQL statements before the SELECT (plus preflight/startup). Each prepared catalog request also incurred protocol round trips. The displayed time omitted connection and catalog work: the baseline reported 37 ms for a read taking 6,593 ms overall.
+
+The updated implementation batches all column metadata in one OID-array query, uses typed one-shot catalog/filter requests, and keeps every permission/type check fresh. Catalog statement count is three regardless of table count. PostgreSQL result timing now includes connection/check/query phases. A LIMIT-201 pagination sentinel does not open another cancellation connection.
+
+Measured release builds on this Mac, PostgreSQL 17 Docker fixture, synthetic 100-table schema, 200 returned rows, one discarded warmup followed by five samples per case. The local TCP proxy delays each forwarded chunk by 10 ms per direction; it is an approximate network-latency experiment, not a measurement of the user's remote server. Both versions use the same harness/data/limits and a fresh database connection per operation. Five samples are a small regression probe; p95 is the largest sample, not a production latency SLO.
+
+| Operation | Before median | After median | Before p95 | After p95 |
+|---|---:|---:|---:|---:|
+| SELECT, manual-edit session | 6,593 ms | 257 ms | 6,606 ms | 259 ms |
+| Browse, manual-edit session | 6,624 ms | 258 ms | 6,631 ms | 259 ms |
+| SELECT, strict reader | 6,666 ms | 341 ms | 6,717 ms | 342 ms |
+| Browse, strict reader | 6,726 ms | 338 ms | 6,754 ms | 342 ms |
+
+Without injected latency, the 100-table manual SELECT median changed from 77.2 to 9.6 ms; strict-reader SELECT from 97.0 to 29.2 ms. The main observed improvement is removal of catalog network round trips. Fresh connection/TLS setup and strict-reader global privilege audits remain deliberate costs. Query plans, server locks, index quality, large fields, OFFSET depth and UI/IPC costs are separate and are not ruled out for a different workload. Harness and reproduction commands are in DEVELOPMENT.md and `src-tauri/examples/benchmark_postgres.rs`.
+
+Discovery now shows all table/view kinds with an explicit read restriction where required. JSON/JSONB, enum and supported arrays no longer hide an entire table. Tests exercise browse/SELECT/filter/save, exact bigint-array values, JSON text conflict detection, invalid JSON rollback, enum names with spaces, enum-array casts, materialized-view reads, and continued rejection of view/RLS/custom-domain execution. A 520-table schema loads completely, beyond the former 500-table limit. Hard limits of 5,000 relations / 50,000 columns fail explicitly instead of returning a partial catalog. Refresh schema discovers new objects while preserving drafts.
+
+Validation: 24 PostgreSQL integration cases on each of versions 15, 16, 17 and 18; 68 Chromium/WebKit UI cases; frontend type check/build and three unit tests; Rust unit tests, strict Clippy, formatting and diff checks. UI fixtures are separate from the real database tests. Native Mac debug bundle builds and opens: connected only to the local disposable fixture without saving credentials, confirmed the formerly hidden JSONB table, browsed 200 rows, ran SELECT through real Tauri IPC, inspected timing phases and a listed view's restriction, then disconnected and closed the test app. No production database connection or Windows native smoke test was performed.

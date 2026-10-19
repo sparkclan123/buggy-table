@@ -53,6 +53,7 @@
     type ConnectionWorkspace,
   } from './lib/connections';
   import ResultGrid from './components/ResultGrid.svelte';
+  import ResultTiming from './components/ResultTiming.svelte';
   import FilterBuilder from './components/FilterBuilder.svelte';
   import { api, errorMessage, desktopAvailable } from './lib/api';
   import { browseSample, sampleConnection, sampleIndexes, sampleRows } from './lib/sample';
@@ -126,6 +127,11 @@
     filters = workspace.appliedFilters,
   ) {
     if (!table || busy || !session.online) return;
+    if (table.readBlockedReason) {
+      workspace.tab = 'structure';
+      error = table.readBlockedReason;
+      return;
+    }
     if (dirtyCount || workspace.uncertain) {
       error = 'Save or discard pending edits before refreshing, filtering or changing pages.';
       return;
@@ -193,7 +199,7 @@
     openTables.push(createWorkspace(table, connection.engine));
     session.activeId = id;
     void persistLayout(session);
-    await loadData(table, 0, []);
+    if (!table.readBlockedReason) await loadData(table, 0, []);
   }
 
   function openConnection() {
@@ -392,12 +398,16 @@
     if (entry.online && workspace.tab === 'data' && !workspace.result) void loadData();
   }
 
-  async function ensureSchema(schema: string) {
-    if (isSample || connection.engine !== 'postgres' || session.loadedSchemas.includes(schema))
+  async function ensureSchema(schema: string, refresh = false) {
+    if (
+      isSample ||
+      connection.engine !== 'postgres' ||
+      (!refresh && session.loadedSchemas.includes(schema))
+    )
       return;
     const tables = await api.schemaTables(connection.id, schema);
     session.info.tables = [...connection.tables.filter((t) => t.schema !== schema), ...tables];
-    session.loadedSchemas.push(schema);
+    if (!session.loadedSchemas.includes(schema)) session.loadedSchemas.push(schema);
   }
 
   async function activateTab(id: string) {
@@ -428,7 +438,7 @@
     busy = true;
     error = '';
     try {
-      await ensureSchema(schema);
+      await ensureSchema(schema, true);
       session.navSchema = schema;
       if (!workspace.selectedName) workspace.schema = schema;
       session.search = '';
@@ -829,6 +839,7 @@
                 workspace.selectedName === table.name &&
                 workspace.schema === table.schema}
               onclick={() => selectTable(table)}
+              title={table.readBlockedReason ?? table.relationKind ?? 'table'}
               disabled={busy || !session.online}><Table2 size={14} />{table.name}</button
             >{/each}
           {#if !visibleTables.length}<p class="sidebar-empty">
@@ -836,7 +847,7 @@
                 ? 'Reconnect to load tables'
                 : search
                   ? 'No matching tables'
-                  : 'No approved base tables'}
+                  : 'No tables or views in this schema'}
             </p>{/if}
         </div>
       {/if}
@@ -859,6 +870,15 @@
           {/each}
         </select>
       </label>
+      {#if connection.engine === 'postgres' && !isSample}
+        <button
+          class="secondary-button small-button"
+          onclick={() => changeSchema(session.navSchema)}
+          disabled={busy || !session.online}
+        >
+          <RefreshCw size={13} />Refresh schema
+        </button>
+      {/if}
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
@@ -992,7 +1012,8 @@
               aria-selected={workspace.tab === 'data'}
               class:current={workspace.tab === 'data'}
               onclick={() => selectTab('data')}
-              disabled={busy || !selected}><Table2 size={15} />Data</button
+              disabled={busy || !selected || !!selected.readBlockedReason}
+              ><Table2 size={15} />Data</button
             ><button
               role="tab"
               aria-selected={workspace.tab === 'structure'}
@@ -1004,7 +1025,8 @@
               aria-selected={workspace.tab === 'indexes'}
               class:current={workspace.tab === 'indexes'}
               onclick={() => selectTab('indexes')}
-              disabled={busy || !selected}><ListTree size={15} />Indexes</button
+              disabled={busy || !selected || !!selected.readBlockedReason}
+              ><ListTree size={15} />Indexes</button
             ><button
               role="tab"
               aria-selected={workspace.tab === 'sql'}
@@ -1105,8 +1127,9 @@
                   ? 'Reading…'
                   : `${workspace.result?.rows.length ?? 0} rows shown`}{#if !isSample && workspace.result}<span
                     class="footer-separator">·</span
-                  >{workspace.result.elapsedMs} ms{/if}{#if workspace.result?.truncated}<span
-                    class="footer-separator">·</span
+                  ><ResultTiming
+                    result={workspace.result}
+                  />{/if}{#if workspace.result?.truncated}<span class="footer-separator">·</span
                   >More rows or byte limit reached{/if}</span
               >
               <div class="pagination">
@@ -1130,7 +1153,8 @@
           {:else if workspace.tab === 'structure' && selected}
             <div class="section-intro">
               <h3>Table structure</h3>
-              <p>Column definitions from the approved schema.</p>
+              <p>{selected.relationKind ?? 'Table'} · Column definitions from this schema.</p>
+              {#if selected.readBlockedReason}<p role="status">{selected.readBlockedReason}</p>{/if}
             </div>
             <div class="grid-scroll">
               <table class="structure-table">
@@ -1139,7 +1163,11 @@
                 ><tbody
                   >{#each selected.columns as column}<tr
                       ><td class="mono">{column.name}</td><td
-                        ><span class="type-chip">{column.dataType}</span></td
+                        ><span class="type-chip"
+                          >{column.typeSchema && column.typeSchema !== 'pg_catalog'
+                            ? `${column.typeSchema}.`
+                            : ''}{column.dataType}</span
+                        ></td
                       ><td>{column.nullable ? 'Yes' : 'No'}</td><td
                         >{#if column.primaryKey}<span class="badge">Primary key</span>{:else}<span
                             class="muted">—</span
@@ -1209,9 +1237,11 @@
               </div>{:else}<ResultGrid result={workspace.queryResult} table={selected} {busy} />
               <div class="result-footer">
                 <span
-                  >{workspace.queryResult
-                    ? `${workspace.queryResult.rows.length} rows · ${workspace.queryResult.elapsedMs} ms${workspace.queryResult.truncated ? ' · Result limit reached' : ''}`
-                    : 'Results appear here'}</span
+                  >{#if workspace.queryResult}{workspace.queryResult.rows.length} rows · <ResultTiming
+                      result={workspace.queryResult}
+                    />{workspace.queryResult.truncated
+                      ? ' · Result limit reached'
+                      : ''}{:else}Results appear here{/if}</span
                 ><span>1,000 rows / 4 MiB maximum</span>
               </div>{/if}
           {/if}
@@ -1342,9 +1372,9 @@
             <CircleHelp size={22} />
             <h3>Preview boundaries</h3>
             <p>
-              PostgreSQL and MySQL expose supported base tables; Redis exposes approved read
-              commands. Views, custom routines, RLS tables and advanced SQL are intentionally
-              excluded.
+              PostgreSQL lists tables and views, including JSON, arrays and enums. Entries that
+              cannot be read show the reason in Structure. MySQL and Redis expose supported reads;
+              custom routines and advanced SQL remain unavailable.
             </p>
             <span class="neutral-badge">Security hardening in progress</span>
           </article>

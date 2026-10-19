@@ -2,7 +2,7 @@
 use crate::{
     models::*,
     policy::quote_identifier,
-    postgres::{Database, query_error},
+    postgres::{Database, column_type_sql, query_error, text_comparison},
 };
 use std::collections::BTreeSet;
 use tokio_postgres::types::ToSql;
@@ -30,7 +30,7 @@ impl Database {
             .batch_execute(&format!("LOCK TABLE {table_sql} IN ACCESS SHARE MODE"))
             .await
             .map_err(query_error)?;
-        let tables = self.tables(schema).await?;
+        let tables = self.approved_tables(schema).await?;
         let table = tables
             .iter()
             .find(|t| t.name == request.table)
@@ -75,20 +75,30 @@ impl Database {
                 }
                 values.push(value.clone());
                 assignments.push(format!(
-                    "{} = ${}::pg_catalog.text::pg_catalog.{}",
+                    "{} = ${}::pg_catalog.text::{}",
                     quote_identifier(name),
                     values.len(),
-                    quote_identifier(&column.data_type)
+                    column_type_sql(column)
                 ));
             }
             let mut predicates = Vec::new();
             for column in &table.columns {
                 values.push(row.original[&column.name].clone());
+                if text_comparison(column) {
+                    // json has no equality operator. Compare the exact displayed
+                    // representation, preserving whitespace/duplicate-key changes.
+                    predicates.push(format!(
+                        "{}::pg_catalog.text IS NOT DISTINCT FROM ${}::pg_catalog.text",
+                        quote_identifier(&column.name),
+                        values.len()
+                    ));
+                    continue;
+                }
                 predicates.push(format!(
-                    "{} IS NOT DISTINCT FROM ${}::pg_catalog.text::pg_catalog.{}",
+                    "{} IS NOT DISTINCT FROM ${}::pg_catalog.text::{}",
                     quote_identifier(&column.name),
                     values.len(),
-                    quote_identifier(&column.data_type)
+                    column_type_sql(column)
                 ));
             }
             let sql = format!(

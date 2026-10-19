@@ -10,7 +10,7 @@ export function createWorkspace(table?: TableInfo, engine = 'postgres') {
     id: table ? tableKey(table.schema, table.name) : 'empty',
     schema: table?.schema ?? '',
     selectedName: table?.name ?? '',
-    tab: (table ? 'data' : 'sql') as TableView,
+    tab: (table?.readBlockedReason ? 'structure' : table ? 'data' : 'sql') as TableView,
     showFilter: false,
     filters: [{ column: table?.columns[0]?.name ?? '', operator: 'equals', value: '' }] as Filter[],
     filterMatch: 'all' as FilterMatch,

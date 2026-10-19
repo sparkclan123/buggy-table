@@ -1,32 +1,33 @@
-buggy-table 0.1.5 — Preview
+buggy-table 0.1.6 — Preview
 
-> **Known macOS installation blocker:** This preview is ad-hoc signed and not notarized. macOS can still show “damaged” with only “Move to Trash”; an Open Anyway option is not guaranteed. Version 0.1.5 fixes bundle integrity only, not Gatekeeper acceptance. A Developer ID signed and notarized release is required for normal distribution and is not available yet.
+Faster PostgreSQL queries and more complete schema discovery, with installers for Mac Apple Silicon, Mac Intel and Windows x64.
 
-- Fix incomplete macOS bundle signatures that could cause “app is damaged” on downloaded builds. Both Apple Silicon and Intel previews now use complete ad-hoc signatures.
-- Verify signatures and sealed resources in both the build output and the app inside each DMG before uploading installers.
-- Signed production builds additionally require Developer ID, a stapled notarization ticket and Gatekeeper acceptance.
+## Changes
 
-This is a **macOS-only packaging fix**. Windows users can continue using [0.1.4](https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.4); no Windows 0.1.5 installer is published.
+- Reduce PostgreSQL catalog loading from one metadata query per table to three batched queries, while checking permissions on every operation. This substantially reduces waiting on remote connections with many tables.
+- In a local latency simulation with 100 tables and 200 returned rows, median SELECT time fell from 6,593 ms to 257 ms in manual-edit mode, and from 6,666 ms to 341 ms in strict-reader mode. These are controlled test results, not a guarantee for every server or query.
+- Show tables containing JSON/JSONB, supported arrays and enums. Support browsing, filtering and manual saves for these types without losing bigint/decimal precision.
+- List views and other restricted relations in the schema browser with a visible explanation in Structure, instead of silently hiding them. Execution restrictions still apply.
+- Load schemas beyond the previous 500-table cap. Catalogs exceeding 5,000 relations or 50,000 columns now fail explicitly instead of returning an incomplete list.
+- Add Refresh schema and preserve unsaved edits when refreshing or switching schemas.
+- Show total PostgreSQL operation time and a breakdown for connection, validation and query execution.
 
-## Included from 0.1.4
+Validated with PostgreSQL 15, 16, 17 and 18 integration tests, Chromium/WebKit UI tests and a native Mac smoke test against disposable local fixtures. The performance measurements did not use a production database.
 
-- Move PostgreSQL schema selection to a native dropdown at the bottom of the sidebar. Move appearance selection into a compact icon beside the app version; System/Light/Dark preferences remain available.
-- Add saved connection bookmarks, pin/recent/search/group filters and explicit Reconnect after restarting. Optional passwords stay in Mac login Keychain / Windows Local Credential Manager.
-- Keep PostgreSQL/MySQL/Redis sessions and table tabs separate when switching; preserve unsaved cells and Redis inspection state.
-- Add searchable PostgreSQL schema selection; bind browse/SQL/index/save to the owning table schema.
-- Restore only table identities on startup and limit clean result caches; no query text, row data or drafts written to connection settings.
-- Remove the PostgreSQL 17-only gate. Test PostgreSQL 15, 16, 17 and 18 with connection, browse, SQL, index/status, save/rollback, cancellation and TLS coverage.
-- Allow newer PostgreSQL majors to attempt connection with an untested-compatibility notice; retain all safety checks.
-- Exclude PostgreSQL 18 virtual generated columns from approved table scope; protect stored generated and identity columns from edits.
-- Add an explicit PostgreSQL TLS mode that requires encryption without verifying the certificate/hostname, for compatibility with private/self-signed servers. Verified TLS remains the default. Neither TLS mode falls back to plaintext.
-- Support optional locally saved custom CA PEM bundles for verified PostgreSQL connections.
-- Distinguish TLS, network and authentication errors with actionable messages.
-- Keep PostgreSQL-only TLS options isolated from MySQL/Redis.
+## Install or replace an older preview
 
-This preview has no Apple Developer ID/notarization or Windows Authenticode certificate, and its in-app updater is disabled. Install manually. Unverified TLS encrypts traffic but does not prevent server impersonation; choose it only for an endpoint you trust. Database contents and credentials are not included in update requests.
+**This preview has no in-app updates.** Versions 0.1.4 and 0.1.5 also shipped with the updater disabled; publishing this release cannot enable it in an already-installed app. Download the appropriate installer and replace the previous version manually. Keep the existing app data folder to retain saved connection settings. Finish or discard unsaved edits and close the app before replacing it.
 
-## Install on Mac
+| Platform | Installer |
+|---|---|
+| Mac Apple Silicon (M series) | `buggy-table_0.1.6_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.6_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.6_x64-setup.exe` |
 
-Download the DMG for your chip, open it, and drag buggy-table to Applications (replace the old app). This preview is ad-hoc signed, **not Apple Developer ID signed or notarized**. On first launch, macOS may block it as an unverified developer. If macOS offers Open Anyway and you trust this release, follow Apple’s instructions. If it only offers Move to Trash, this preview has no guaranteed opening flow; use a Developer ID signed and notarized build when available. Managed Macs may prohibit overrides. Do not disable Gatekeeper. See [Apple’s opening instructions](https://support.apple.com/en-us/102445).
+On Mac, open the DMG and drag buggy-table into Applications, replacing the old app. On Windows, run the installer and use the existing installation location. Checksums are provided in `SHA256SUMS.txt`; build provenance is in `BUILD_INFO.txt`.
 
-This fixes bundle integrity; it does not promise warning-free installation. Warning-free distribution requires Apple Developer ID and notarization. Saved connection settings remain in the existing app data location; do not delete that folder when replacing the app.
+## Preview signing limits
+
+The Mac apps have ad-hoc bundle signatures but **no Apple Developer ID or notarization**. macOS may still show “damaged” with only “Move to Trash”; Open Anyway is not guaranteed. If your Mac offers Open Anyway and you trust the download, follow [Apple's instructions](https://support.apple.com/en-us/102445). Do not disable Gatekeeper. A Developer ID signed and notarized release is required for normal Mac distribution.
+
+The Windows installer has **no Authenticode certificate** and may show an unknown-publisher or SmartScreen warning. This release is a Preview, not an OS-certified production build. Future in-app updates require installation of an updater-enabled signed release once the signing credentials are configured.
