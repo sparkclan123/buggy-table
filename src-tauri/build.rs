@@ -21,6 +21,7 @@ fn main() {
             "redis_command",
             "check_update",
             "install_update",
+            "open_download_page",
         ]),
     ))
     .expect("failed to build Tauri application metadata");

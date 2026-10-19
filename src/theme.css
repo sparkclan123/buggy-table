@@ -22,6 +22,8 @@
   --edit-bg: #fff2c6;
   --edit-border: #c4952c;
   --row-selected: #e3eefb;
+  --row-stripe: #f3f6fa;
+  --table-icon: #4c8dbd;
   --delete-bg: #ffe2e3;
   --delete-ink: #812d35;
   --delete-border: #d8979d;
@@ -50,6 +52,8 @@
   --edit-bg: #4a3c20;
   --edit-border: #b29142;
   --row-selected: #263d56;
+  --row-stripe: #24282f;
+  --table-icon: #82bce6;
   --delete-bg: #512d34;
   --delete-ink: #ffd5d9;
   --delete-border: #a4626d;

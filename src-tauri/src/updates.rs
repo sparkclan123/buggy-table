@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, State, ipc::Channel};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
 
@@ -13,6 +14,21 @@ use crate::{
 
 const RELEASES: &str = "https://github.com/sparkclan123/buggy-table-releases/releases/download/";
 const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
+
+/// Open the public downloads page in the OS browser, including preview releases.
+/// The webview cannot supply a URL, application name or shell arguments.
+#[tauri::command]
+pub async fn open_download_page(app: AppHandle) -> AppResult<()> {
+    app.opener()
+        .open_url(
+            "https://github.com/sparkclan123/buggy-table-releases/releases",
+            None::<&str>,
+        )
+        .map_err(|_| AppError::new(
+            "OPEN_DOWNLOAD_PAGE",
+            "Could not open your browser. Download at https://github.com/sparkclan123/buggy-table-releases/releases",
+        ))
+}
 
 #[derive(Default)]
 pub struct Updates {

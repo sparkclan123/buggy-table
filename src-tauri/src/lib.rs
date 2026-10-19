@@ -30,6 +30,11 @@ pub fn run() {
         .manage(service::Workbench::default())
         .manage(updates::Updates::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             connection_commands::list_connections,
@@ -50,6 +55,7 @@ pub fn run() {
             commands::redis_command,
             updates::check_update,
             updates::install_update,
+            updates::open_download_page,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start desktop application");

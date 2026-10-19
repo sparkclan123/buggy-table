@@ -200,7 +200,7 @@ pub struct BrowseRequest {
 }
 
 fn default_page_size() -> usize {
-    50
+    100
 }
 
 impl BrowseRequest {

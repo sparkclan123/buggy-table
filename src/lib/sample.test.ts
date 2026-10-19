@@ -4,8 +4,9 @@ import { quoteIdentifier, errorMessage } from './api';
 
 describe('local sample explorer', () => {
   it('paginates and distinguishes null from an empty value', () => {
-    expect(browseSample(sampleTables[0], [], 8).rows).toHaveLength(50);
-    expect(browseSample(sampleTables[0], [], 8).truncated).toBe(false);
+    expect(browseSample(sampleTables[0], [], 0).rows).toHaveLength(100);
+    expect(browseSample(sampleTables[0], [], 4).rows).toHaveLength(50);
+    expect(browseSample(sampleTables[0], [], 4).truncated).toBe(false);
     expect(
       browseSample(sampleTables[1], [{ column: 'email', operator: 'isNull', value: '' }], 0).rows,
     ).toHaveLength(1);

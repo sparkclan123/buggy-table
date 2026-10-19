@@ -105,7 +105,7 @@ export function browseSample(
   filterMatch: FilterMatch = 'all',
   sortColumn: string | null = null,
   descending = false,
-  pageSize = 50,
+  pageSize = 100,
 ): QueryResult {
   const rows = (sampleRows[table.name] ?? []).filter((row) => {
     const test = (filter: Filter) => {

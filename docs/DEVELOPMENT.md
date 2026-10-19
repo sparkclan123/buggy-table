@@ -14,7 +14,7 @@
 - `tokio-postgres` replaces the tentative SQLx choice for the first PostgreSQL adapter. Native cancellation and simple-query text streaming keep dynamic values lossless without a large decoder.
 - PostgreSQL keeps one reusable read transport per connected workspace (maximum eight workspaces). Successful reads consume their result completely and leave no open transaction. Error/cancelled/truncated-by-byte-limit transports are discarded. Exact counts and saves use separate, non-reusable connections; save triggers cannot contaminate a read session. MySQL/Redis still use their existing dedicated transports.
 - Password-free local bookmarks plus optional platform credential storage (Mac login Keychain / Windows Local persistence). The Rust password holder zeroizes its owned buffer on drop, but driver/OS/JS copies and process memory are not claimed to be perfectly erased.
-- 50 rows by default, selectable 100/250/500 per browser page; raw SELECT results stop after 1,000 rows or 4 MiB. The UI receives one bounded result, not a complete streaming IPC protocol yet.
+- 100 rows by default, selectable 50/100/250/500 per browser page; raw SELECT results stop after 1,000 rows or 4 MiB. The UI receives one bounded result, not a complete streaming IPC protocol yet.
 - CodeMirror loads only when the SQL tab is opened.
 - Monitoring is manual refresh, not a background collector. No history is persisted.
 - Local AI remains unavailable. MySQL/Redis are read-only adapters with their own policy and integration fixtures; see SECURITY_REVIEW.md.
@@ -124,7 +124,7 @@ The OS credential roundtrip test is opt-in because it writes/deletes a disposabl
 
 ## Grid controls and explicit counts
 
-The default browse page has 50 rows; Rust validates 50/100/250/500 and caps OFFSET at 100,000. Result bytes still stop at 4 MiB. When this byte cap cuts a page short, Next is disabled to avoid silently skipping unread rows. Full values changes wrapping only; it never removes the byte/row caps. Variable-height virtualization measures visible rows and retains overscan; the default remains fixed 28 px rows. The first row-number column stays sticky while horizontal scrolling.
+The default browse page has 100 rows; Rust validates 50/100/250/500 and caps OFFSET at 100,000. Result bytes still stop at 4 MiB. When this byte cap cuts a page short, Next is disabled to avoid silently skipping unread rows. Full values changes wrapping only; it never removes the byte/row caps. Variable-height virtualization measures visible rows and retains overscan; the default remains fixed 28 px rows. The first row-number column stays sticky while horizontal scrolling.
 
 Catalog estimates render with the first page. Only Count exact calls `count_table_rows`, using the same table/filters, bound values, fresh role validation, operation gate and cancellation. A 5-second server statement timeout bounds counting; connection/validation time is additional. A completed count is labeled as a snapshot, cleared on filter/save changes, and is never a paging prerequisite.
 
@@ -135,3 +135,10 @@ The read-only Row details inspector uses the selected row already in memory, inc
 Header drag and Alt+Left/Right reorder displayed columns without changing query/result indices. LocalStorage contains only bounded column-order preferences keyed by connection/table identity (maximum 200 layouts); no row values, SQL or secrets. Timestamp editing/filtering uses free text plus a native date/time dialog. String composition preserves the displayed UTC offset and up to six fractional digits instead of converting through the computer's timezone.
 
 Overview graphs retain up to 30 manual snapshots per connection in memory; no polling or persisted metric history. Unknown metrics display unavailable. Redis INFO is parsed separately for server/memory/stats/clients/keyspace; denied INFO does not draw zero graphs. Redis SCAN results are virtualized records, accumulated/deduplicated across cursors, with an explicit 10,000-key display limit. An empty batch with nonzero cursor still allows Next scan. Binary key names appear as hex records with text inspection disabled.
+
+
+### Table appearance and tab arrangement (0.1.9)
+
+Grid stripes follow the absolute row index so virtual scrolling does not flip their parity. Row details alternates complete fields. Edit/delete colors override stripes and selection in both themes. Table tabs support pointer capture with a lifted preview, insertion marker, edge scrolling and cancellation; Alt+Left/Right provides a keyboard alternative. Reordering existing workspace objects keeps drafts/results/selection/scroll and persists only identities through the existing per-connection layout writer. The tab scrollbar is 3 px on supported desktop WebViews.
+
+The Updates button invokes `open_download_page`, whose Rust implementation opens a fixed HTTPS GitHub releases URL with the [Tauri opener](https://v2.tauri.app/plugin/opener/). No URL or application argument is accepted from the WebView. Generic opener commands and JavaScript link interception are not enabled. Signed builds retain separate Update options; previews link to downloads and require manual replacement.

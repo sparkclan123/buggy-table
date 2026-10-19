@@ -3,7 +3,13 @@ import { test, expect, type Page } from '@playwright/test';
 
 async function updaterStub(
   page: Page,
-  options: { disabled?: boolean; current?: boolean; error?: boolean; progress?: boolean } = {},
+  options: {
+    disabled?: boolean;
+    current?: boolean;
+    error?: boolean;
+    progress?: boolean;
+    openError?: boolean;
+  } = {},
 ) {
   await page.addInitScript((options) => {
     const target = window as unknown as Record<string, unknown>;
@@ -14,11 +20,16 @@ async function updaterStub(
       transformCallback: () => 1,
       invoke: async (
         command: string,
-        payload: { fetch?: boolean; progress?: { onmessage: (value: unknown) => void } },
+        payload: { fetch?: boolean; progress?: { onmessage: (value: unknown) => void } } = {},
       ) => {
         if (command.startsWith('plugin:')) return 1;
         if (command === 'list_connections') return [];
         (target.updateCalls as unknown[]).push({ command, fetch: payload.fetch });
+        if (command === 'open_download_page' && options.openError)
+          throw {
+            message:
+              'Could not open your browser. Download at https://github.com/sparkclan123/buggy-table-releases/releases',
+          };
         if (command === 'check_update') {
           if (options.error && payload.fetch)
             throw { message: 'Could not check GitHub for updates. Try again later.' };
@@ -87,7 +98,7 @@ test('update offer blocks dirty tabs, renders release text safely, and recovers 
 }) => {
   await updaterStub(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Update v0.2.0', exact: true }).click();
+  await page.getByRole('button', { name: 'Update options', exact: true }).click();
   await expect(
     page.getByText('<script>unsafe()</script> Release notes', { exact: true }),
   ).toBeVisible();
@@ -109,10 +120,10 @@ test('download progress locks workspace and automatic checks can be disabled per
 }) => {
   await updaterStub(page, { progress: true });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Update v0.2.0', exact: true }).click();
+  await page.getByRole('button', { name: 'Update options', exact: true }).click();
   await page.getByLabel('Check automatically').uncheck();
   await page.reload();
-  await page.getByRole('button', { name: 'Updates', exact: true }).click();
+  await page.getByRole('button', { name: 'Update options', exact: true }).click();
   await expect(page.getByLabel('Check automatically')).not.toBeChecked();
   expect(
     await page.evaluate(() => (window as unknown as { updateCalls: unknown[] }).updateCalls),
@@ -124,18 +135,35 @@ test('download progress locks workspace and automatic checks can be disabled per
   await expect(page.getByRole('progressbar')).toHaveAttribute('value', '1048576');
 });
 
-test('unconfigured build does not fetch; network failures and latest version have clear states', async ({
+test('preview Updates opens GitHub downloads without fetching updates or losing pending edits', async ({
   page,
 }) => {
   await updaterStub(page, { disabled: true });
   await page.goto('/');
+  await editCell(page, 1, 'customer');
+  await page.getByRole('textbox', { name: 'Cell value row 1 customer' }).fill('Keep this draft');
+  await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Updates', exact: true }).click();
-  await expect(
-    page.getByText('Updates are enabled in signed release builds.', { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit row 1 customer', exact: true })).toHaveText(
+    'Keep this draft',
+  );
+  await expect(page.getByRole('button', { name: 'Update options' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Application updates' })).toHaveCount(0);
   expect(
     await page.evaluate(() => (window as unknown as { updateCalls: unknown[] }).updateCalls),
-  ).toEqual([{ command: 'check_update', fetch: false }]);
+  ).toEqual([
+    { command: 'check_update', fetch: false },
+    { command: 'open_download_page', fetch: undefined },
+  ]);
+});
+
+test('download browser errors display a usable download address', async ({ page }) => {
+  await updaterStub(page, { disabled: true, openError: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Updates', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(
+    'https://github.com/sparkclan123/buggy-table-releases/releases',
+  );
 });
 
 for (const failure of [false, true]) {
@@ -144,7 +172,7 @@ for (const failure of [false, true]) {
   }) => {
     await updaterStub(page, { current: true, error: failure });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Updates', exact: true }).click();
+    await page.getByRole('button', { name: 'Update options', exact: true }).click();
     await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
     await expect(
       page.getByText(

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
   import { desktopAvailable, errorMessage } from '../lib/api';
+  import { Settings2 } from '@lucide/svelte';
 
   let { blocked, installing = $bindable(false) }: { blocked: boolean; installing?: boolean } =
     $props();
@@ -22,6 +23,16 @@
   let message = $state('');
   let failed = $state(false);
   let progress = $state<Progress | null>(null);
+
+  async function openDownloads() {
+    try {
+      await invoke('open_download_page');
+    } catch (error) {
+      failed = true;
+      message = errorMessage(error);
+      open = true;
+    }
+  }
 
   function preferenceChanged() {
     try {
@@ -117,10 +128,7 @@
           >
         </div>
         {#if !configured}
-          <p>
-            Updates are enabled in signed release builds. This development build does not contact
-            GitHub.
-          </p>
+          <p>Preview releases can be downloaded from GitHub and installed manually.</p>
         {:else}
           <label
             ><input
@@ -168,11 +176,23 @@
     <button
       class="update-toggle"
       class:available={!!version}
-      aria-expanded={open}
-      onclick={() => (open = !open)}
+      title="Open GitHub downloads in your browser"
+      onclick={openDownloads}
       disabled={installing}
     >
       {installing ? 'Updating…' : version ? `Update v${version}` : 'Updates'}
     </button>
+    {#if configured}
+      <button
+        class="icon-button"
+        aria-label="Update options"
+        title="Update options"
+        aria-expanded={open}
+        onclick={() => (open = !open)}
+        disabled={installing}
+      >
+        <Settings2 size={12} />
+      </button>
+    {/if}
   </div>
 {/if}

@@ -26,7 +26,9 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - Credentials, SQL และ results อยู่ใน memory ของ session ไม่มีการบันทึกลง application storage
 - ไม่มี analytics, cloud AI, remote fonts หรือ download โมเดลอัตโนมัติ
 - Light / Dark / System ที่ Appearance; จดจำเฉพาะค่า preference
-- Signed release มีปุ่ม Updates มุมล่างขวา ตรวจ GitHub เมื่อเปิดแอปและทุก 6 ชั่วโมง ปิด automatic checks ได้ ไม่มีข้อมูล DB/credential ใน request
+- ปุ่ม Updates มุมล่างขวาเปิดหน้าดาวน์โหลด GitHub; รุ่น Preview ต้องติดตั้งทับเอง ส่วน signed release มี Update options สำหรับตรวจและติดตั้งในแอป
+- แถวใน Data และ Row details สลับสีตามธีมมืด/สว่าง โดยสีแก้ไขและลบยังเด่นกว่า; เริ่มต้น 100 แถวต่อหน้า เลือก 50/100/250/500 ได้
+- กดค้างหรือลากแท็บเพื่อจัดลำดับ มีภาพแท็บลอยและเลื่อนเมื่อชิดขอบ; Alt+←/→ ใช้แทนการลากได้ จำลำดับกับ connection ในเครื่องโดยไม่โหลดข้อมูลใหม่
 - วิธีสร้างตัวติดตั้งและออกรุ่นใหม่: [Distribution guide](docs/DISTRIBUTION.md)
 
 เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE/DELETE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ

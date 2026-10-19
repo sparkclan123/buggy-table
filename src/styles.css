@@ -295,6 +295,9 @@ pre,
   text-align: left;
   overflow: hidden;
 }
+.table-list button > svg {
+  color: var(--table-icon);
+}
 .sidebar-empty {
   padding: 10px;
   color: var(--muted);
@@ -392,6 +395,46 @@ pre,
   border: 0;
   padding: 8px 10px;
   font-size: 11px;
+  user-select: none;
+  touch-action: pan-x;
+}
+.table-tab > button[role='tab'] {
+  touch-action: none;
+}
+.tab-drag-origin {
+  opacity: 0.3;
+}
+.tab-drag-ghost {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--focus);
+  border-radius: 5px;
+  background: var(--canvas);
+  box-shadow: 0 5px 16px #0004;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tab-drop-marker {
+  position: fixed;
+  z-index: 101;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--table-icon);
+  pointer-events: none;
+}
+.tab-order-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .table-tab > .close-tab {
   padding: 6px;
@@ -612,6 +655,9 @@ pre,
 .inspector-field {
   padding: 7px 8px;
   border-bottom: 1px solid var(--line);
+}
+.inspector-field:nth-child(even) {
+  background: var(--row-stripe);
 }
 .inspector-field dt {
   display: flex;
@@ -1214,6 +1260,10 @@ pre,
   min-width: 0;
   flex: 1;
 }
+.schema-refresh {
+  flex-shrink: 0;
+  padding: 4px;
+}
 .sidebar-version {
   align-items: center;
 }
@@ -1452,11 +1502,14 @@ pre,
 
 /* Table workbench: state remains legible while scrolling or hiding controls. */
 .table-tabbar {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 .table-tabbar::-webkit-scrollbar {
-  height: 4px;
+  height: 3px;
+}
+.table-tabbar::-webkit-scrollbar-track {
+  background: transparent;
 }
 .table-tabbar::-webkit-scrollbar-thumb {
   background: var(--border);
@@ -1472,6 +1525,13 @@ pre,
 .grid-scroll::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 6px;
+}
+.data-table tbody td,
+.data-table tbody .row-number {
+  background: var(--canvas);
+}
+.data-table .striped-row td {
+  background: var(--row-stripe);
 }
 .data-table td.edited,
 .data-table td.editing {

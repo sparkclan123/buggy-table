@@ -16,10 +16,10 @@ test('sample browsing, filters and pagination work without external requests', a
   await page.getByLabel('Filter 1 column').selectOption('status');
   await page.getByLabel('Filter 1 value').fill('completed');
   await page.getByRole('button', { name: 'Apply filters' }).click();
-  await expect(page.getByText('50 rows shown')).toBeVisible();
+  await expect(page.getByText('100 rows shown')).toBeVisible();
   await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Clear filter', exact: true }).click();
-  await expect(page.getByText('50 rows shown')).toBeVisible();
+  await expect(page.getByText('100 rows shown')).toBeVisible();
   const rendered = await page
     .getByRole('table', { name: 'Query results' })
     .locator('tbody tr')
@@ -230,7 +230,7 @@ test('header sorting covers the whole dataset before paging and respects pending
   );
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit row 1 total', exact: true })).toHaveText(
-    '5500.00',
+    '4812.50',
   );
   await editCell(page, 1, 'customer');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Pending');
@@ -263,7 +263,7 @@ test('multiple filters support AND, OR, removal and tab persistence', async ({
   await expect(page.getByLabel('Filter 2 value')).toHaveValue('completed');
   await page.getByLabel('Match filters').selectOption('any');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect(page.getByText('50 rows shown')).toBeVisible();
+  await expect(page.getByText('100 rows shown')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('compact-filters.png') });
   await page.getByRole('button', { name: 'Remove filter 2', exact: true }).click();
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();

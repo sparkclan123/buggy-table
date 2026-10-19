@@ -394,6 +394,7 @@
               aria-rowindex={index + 2}
               aria-selected={selectedRows.includes(index)}
               class:row-selected={selectedRows.includes(index)}
+              class:striped-row={(index + rowOffset) % 2 === 1}
               class:pending-delete={deletedRows.includes(index)}
               use:measureRow={index}
             >

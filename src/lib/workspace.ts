@@ -20,7 +20,7 @@ export function createWorkspace(table?: TableInfo, engine = 'postgres') {
     descending: false,
     columnWidths: {} as Record<string, number>,
     pageNumber: 0,
-    pageSize: 50,
+    pageSize: 100,
     fullValues: false,
     collapsed: false,
     selectedRows: [] as number[],

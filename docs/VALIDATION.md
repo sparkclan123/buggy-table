@@ -1,5 +1,13 @@
 # Validation history
 
+## Table appearance and tab arrangement — 0.1.9 Preview, 2026-10-19
+
+- 106 browser cases passed across Chromium/WebKit (104 in the full run, then the two corrected stripe assertions passed in a targeted rerun). Coverage includes lifted tab dragging in both directions, keyboard reordering, Escape/outside cancellation, overflow edge scrolling, saved order, preservation of drafts and no additional database queries.
+- Alternating Data rows and Row details fields were checked visually in light/dark screenshots; virtual scrolling retains stripe colors, including the sticky row selector. Existing selection/edit/delete precedence cases passed. The tab scrollbar is 3 px and Refresh schema shares the selector row.
+- The default is now 100 rows; all 50/100/250/500 options, pagination, sorting and full-value virtualization passed. Preview Updates invokes the fixed downloads command while keeping drafts; browser-open failures show the address. Existing signed-update guards and recovery tests passed.
+- Frontend unit cases (8), Svelte/TypeScript checks, Rust clippy with warnings denied, and non-database Rust tests passed. UI database cases use IPC doubles. Cross-platform installer and CI provenance is recorded in BUILD_INFO.txt.
+- The native PostgreSQL transport is unchanged except for the omitted-page-size default. The running older native app and its local fixture were left untouched.
+
 ## Row selection and read-only inspector — 0.1.8 Preview, 2026-10-19
 
 - First activation selects the entire row; a subsequent activation within that selected row opens an eligible editor. Ordinary typing, including Space, cannot accidentally open an editor. Immutable/read-only cells also select rows. Edited cells and pending deletions override selection colors in both themes, including hover and active editors.

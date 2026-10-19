@@ -3,9 +3,9 @@ import { expect, test } from '@playwright/test';
 
 test('page sizes, optional counts, collapsed controls and virtual rows', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByLabel('Rows per page')).toHaveValue('50');
+  await expect(page.getByLabel('Rows per page')).toHaveValue('100');
   await expect(page.getByText('450 total rows')).toBeVisible();
-  for (const size of [100, 250, 500]) {
+  for (const size of [50, 100, 250, 500]) {
     await page.getByLabel('Rows per page').selectOption(String(size));
     await expect(page.getByText(`${Math.min(size, 450)} rows shown`)).toBeVisible();
     expect(await page.locator('.data-table tbody tr').count()).toBeLessThan(50);
@@ -151,6 +151,6 @@ test('full values are optional, wrap long cells and retain sticky row selectors'
   await page.locator('.grid-scroll').evaluate((e) => {
     e.scrollTop = e.scrollHeight;
   });
-  await expect(page.getByRole('button', { name: 'Select row 50', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Select row 100', exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('full-values.png') });
 });

@@ -21,6 +21,7 @@
     "allow-redis-command",
     "allow-check-update",
     "allow-install-update",
+    "allow-open-download-page",
     "core:window:allow-set-theme",
     "allow-list-connections",
     "allow-connect-profile",

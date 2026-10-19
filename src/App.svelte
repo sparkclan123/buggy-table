@@ -34,6 +34,7 @@
   } from '@lucide/svelte';
   import ThemeControl from './components/ThemeControl.svelte';
   import UpdateNotice from './components/UpdateNotice.svelte';
+  import TableTabs from './components/TableTabs.svelte';
   let updating = $state(false);
   import { onMount } from 'svelte';
   import { guardWindowClose, listenForTabClose } from './lib/window-lifecycle';
@@ -995,8 +996,19 @@
       {/if}
     </div>
     <div class="sidebar-bottom">
-      <label class="schema-control">
+      <div class="schema-control">
         <span>{connection.engine === 'postgres' ? 'Schema' : 'Database'}</span>
+        {#if connection.engine === 'postgres' && !isSample}
+          <button
+            class="icon-button schema-refresh"
+            aria-label="Refresh schema"
+            title="Refresh schema"
+            onclick={() => changeSchema(session.navSchema)}
+            disabled={busy || !session.online}
+          >
+            <RefreshCw size={13} />
+          </button>
+        {/if}
         <select
           aria-label="Select PostgreSQL schema"
           value={session.navSchema}
@@ -1011,16 +1023,7 @@
             <option value={schema}>{schema}</option>
           {/each}
         </select>
-      </label>
-      {#if connection.engine === 'postgres' && !isSample}
-        <button
-          class="secondary-button small-button"
-          onclick={() => changeSchema(session.navSchema)}
-          disabled={busy || !session.online}
-        >
-          <RefreshCw size={13} />Refresh schema
-        </button>
-      {/if}
+      </div>
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
@@ -1095,38 +1098,22 @@
             bind:busy
           />{/key}
       {:else if page === 'explorer'}
-        <div class="table-tabbar" role="tablist" aria-label="Open tables">
-          {#each openTables.filter((t) => t.id !== 'empty') as item (item.id)}
-            <div class:active={item.id === activeId} class="table-tab">
-              <button
-                role="tab"
-                aria-selected={item.id === activeId}
-                onclick={() => activateTab(item.id)}
-                disabled={busy}
-              >
-                <Table2
-                  size={14}
-                />{item.selectedName}{#if item.schema && item.schema !== 'public'}<small
-                    class="muted"
-                  >
-                    · {item.schema}</small
-                  >{/if}{#if pendingRows(item) || item.uncertain}<span
-                    class="dirty-dot"
-                    aria-label="Unsaved changes"
-                  ></span>{/if}
-              </button>
-              <button
-                class="close-tab"
-                aria-label={`Close ${item.selectedName} tab`}
-                onclick={() => closeTable(item.id)}
-                disabled={busy}><X size={13} /></button
-              >
-            </div>
-          {/each}
-          {#if openTables[0]?.id === 'empty'}<span class="muted small"
-              >Select a table from the sidebar to open it.</span
-            >{/if}
-        </div>
+        {#key session.key}
+          <TableTabs
+            tabs={openTables}
+            {activeId}
+            {busy}
+            onactivate={activateTab}
+            onclose={closeTable}
+            onreorder={(ids) => {
+              if (busy || ids.length !== session.tabs.length) return;
+              const byId = new Map(session.tabs.map((tab) => [tab.id, tab]));
+              if (new Set(ids).size !== ids.length || ids.some((id) => !byId.has(id))) return;
+              session.tabs = ids.map((id) => byId.get(id)!);
+              persistLayout(session);
+            }}
+          />
+        {/key}
 
         <div class="table-context">
           <h1>
