@@ -146,6 +146,8 @@ pub struct QueryResult {
 #[serde(rename_all = "camelCase")]
 pub struct QueryTimings {
     pub connection_ms: u64,
+    pub connection_reused: bool,
+    pub cleanup_ms: u64,
     pub validation_ms: u64,
     pub execution_ms: u64,
 }

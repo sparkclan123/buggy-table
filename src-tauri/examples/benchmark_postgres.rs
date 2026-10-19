@@ -3,6 +3,10 @@
 //!   --manifest-path src-tauri/Cargo.toml --no-default-features --example benchmark_postgres
 use std::{
     error::Error,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use table_por::{models::*, service::Workbench};
@@ -63,9 +67,12 @@ async fn main() -> Result<()> {
     admin.batch_execute(&ddl).await?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
+    let connections_opened = Arc::new(AtomicUsize::new(0));
+    let accepted = connections_opened.clone();
     let proxy = tokio::spawn(async move {
         let mut connections = JoinSet::new();
         while let Ok((incoming, _)) = listener.accept().await {
+            accepted.fetch_add(1, Ordering::Relaxed);
             connections.spawn(async move {
                 let outgoing = TcpStream::connect("127.0.0.1:15432").await?;
                 incoming.set_nodelay(true)?;
@@ -79,7 +86,7 @@ async fn main() -> Result<()> {
             while connections.try_join_next().is_some() {}
         }
     });
-    let result = measure(&schema, port, count, delay_ms, samples).await;
+    let result = measure(&schema, port, count, delay_ms, samples, &connections_opened).await;
     proxy.abort();
     // Cleanup happens even if a measured app operation fails.
     admin
@@ -95,8 +102,11 @@ async fn measure(
     tables: usize,
     delay_ms: usize,
     samples: usize,
+    connections_opened: &AtomicUsize,
 ) -> Result<()> {
     for manual_edits in [true, false] {
+        let transports_before = connections_opened.load(Ordering::Relaxed);
+        let connect_started = Instant::now();
         let app = Workbench::default();
         let info = app
             .connect(ConnectRequest {
@@ -113,9 +123,12 @@ async fn measure(
                 manual_edits,
             })
             .await?;
+        let connect_ms = connect_started.elapsed().as_secs_f64() * 1000.0;
         for operation in ["query", "browse"] {
             let mut totals = Vec::new();
             let mut reported = Vec::new();
+            let mut stages = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+            let mut reused = 0;
             for sample in 0..=samples {
                 let started = Instant::now();
                 let result = if operation == "query" {
@@ -153,16 +166,34 @@ async fn measure(
                 if sample > 0 {
                     totals.push(total);
                     reported.push(result.elapsed_ms);
+                    if let Some(timing) = result.timings {
+                        for (values, ms) in stages.iter_mut().zip([
+                            timing.connection_ms,
+                            timing.validation_ms,
+                            timing.execution_ms,
+                            timing.cleanup_ms,
+                        ]) {
+                            values.push(ms);
+                        }
+                        reused += usize::from(timing.connection_reused);
+                    }
                 }
             }
             totals.sort_by(f64::total_cmp);
             reported.sort_unstable();
+            for values in &mut stages {
+                values.sort_unstable();
+            }
             println!(
                 "{}",
                 serde_json::json!({
                     "tables": tables, "delayPerDirectionMs": delay_ms, "mode": if manual_edits {"manual"} else {"strict"},
                     "operation": operation, "rows": if operation == "query" {200} else {50}, "samples": samples, "medianTotalMs": totals[samples/2],
                     "p95TotalMs": totals[(samples * 95).div_ceil(100) - 1], "medianReportedMs": reported[samples/2],
+                    "connectMs": connect_ms,
+                    "physicalConnections": connections_opened.load(Ordering::Relaxed) - transports_before,
+                    "reusedSamples": reused,
+                    "medianStagesMs": {"connection": stages[0][samples/2], "validation": stages[1][samples/2], "execution": stages[2][samples/2], "cleanup": stages[3][samples/2]},
                 })
             );
         }

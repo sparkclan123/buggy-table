@@ -305,7 +305,7 @@ Security core ได้แก่ policy, credential handling และ audit ข
 - ใช้ role เฉพาะสำหรับอ่าน objects ที่อนุญาต ไม่มี superuser, owner, `BYPASSRLS`, role memberships ที่ยกระดับสิทธิ์ หรือสิทธิ์จัดการ server
 - ตรวจ effective privileges รวมสิทธิ์จาก `PUBLIC`, inherited roles, schema creation, database `TEMP` และ routine execution ไม่พิจารณาแค่ direct grants
 - role ไม่มีสิทธิ์เขียนตารางยังอาจเรียก routine ผ่านสิทธิ์ `PUBLIC` ได้ จึงต้องมี allowlist และ DBA provisioning ที่เหมาะสม ไม่แก้ grants ของระบบจริงอัตโนมัติ
-- เปิด read-only transaction ต่อ execution ตั้ง statement/lock/idle transaction timeout แล้ว rollback/cleanup เสมอ
+- ให้แต่ละ execution อยู่ใน read-only transaction พร้อม statement/lock/idle transaction timeout และจบ transaction ทุกครั้ง; PostgreSQL read path ใช้ implicit transaction กับ default_transaction_read_only=on ส่วน count/save ที่มี transaction settings ใช้ connection แยก
 - จำกัด `search_path`, ใช้ identifiers แบบระบุ schema และตรวจการ resolve function/operator/type ไม่ให้ object ชื่อเหมือนกันเปลี่ยนความหมาย query
 - จำกัด views, foreign tables/FDW และ custom types/casts/operators เพราะมี dependency ที่ AST ของ query ภายนอกอาจไม่เปิดเผย
 - connection สำหรับ metrics แยก policy และเพิ่มสิทธิ์เท่าที่จำเป็น; อย่าแจก role monitoring กว้างให้ AI

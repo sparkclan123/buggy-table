@@ -1,3 +1,4 @@
+import { editCell } from './grid-helpers';
 import { expect, test } from '@playwright/test';
 
 test('page sizes, optional counts, collapsed controls and virtual rows', async ({ page }) => {
@@ -28,7 +29,7 @@ test('edited cells and staged deletions survive until explicit save, including C
   await page.goto('/');
   await page.getByLabel('Appearance', { exact: true }).selectOption('light');
   const cell = page.getByRole('button', { name: 'Edit row 1 customer', exact: true });
-  await cell.click();
+  await editCell(page, 1, 'customer');
   const input = page.getByRole('textbox', { name: 'Cell value row 1 customer', exact: true });
   await input.fill('Draft');
   await input.press('Backspace');
@@ -82,7 +83,7 @@ test('column reorder preserves correct cells and persists only the layout', asyn
   expect(stored).not.toContain('Mali S.');
   await page.getByRole('button', { name: 'Sort by total', exact: true }).dragTo(customer);
   await expect(headings.first()).toHaveAttribute('aria-label', 'Sort by total');
-  await page.getByRole('button', { name: 'Edit row 1 total', exact: true }).click();
+  await editCell(page, 1, 'total');
   await page.getByRole('textbox', { name: 'Cell value row 1 total' }).fill('99.50');
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
@@ -95,7 +96,7 @@ test('timestamp editor and filter accept typing and calendar without timezone co
   page,
 }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Edit row 1 created_at', exact: true }).click();
+  await editCell(page, 1, 'created_at');
   const input = page.getByRole('textbox', { name: 'Cell value row 1 created_at', exact: true });
   await input.fill('2026-10-19 23:01:02.123456+07:00');
   await page
@@ -126,7 +127,7 @@ test('full values are optional, wrap long cells and retain sticky row selectors'
   await page.goto('/');
   const toggle = page.getByRole('button', { name: 'Full values' });
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await page
     .getByRole('textbox', { name: 'Cell value row 1 customer' })
     .fill('Long value '.repeat(120));

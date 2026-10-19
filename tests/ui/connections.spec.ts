@@ -1,3 +1,4 @@
+import { editCell } from './grid-helpers';
 import { test, expect, type Page } from '@playwright/test';
 
 // IPC doubles exercise UI ownership. Rust tests use real PostgreSQL schemas and roles.
@@ -145,8 +146,14 @@ async function connections(page: Page, restoreTabs = false) {
               ],
             ],
             sql: 'SELECT …',
-            elapsedMs: 125,
-            timings: { connectionMs: 80, validationMs: 40, executionMs: 5 },
+            elapsedMs: 47,
+            timings: {
+              connectionMs: 0,
+              connectionReused: true,
+              cleanupMs: 2,
+              validationMs: 40,
+              executionMs: 5,
+            },
             truncated: false,
           };
         if (command === 'save_table_changes') {
@@ -193,11 +200,11 @@ test('PostgreSQL result time includes connection and validation in both data and
   page,
 }) => {
   await start(page);
-  const timing = page.getByText('125 ms total', { exact: true });
+  const timing = page.getByText('47 ms total', { exact: true });
   await expect(timing).toBeVisible();
   await expect(timing).toHaveAttribute(
     'title',
-    /Connection: 80 ms.*Checks and schema: 40 ms.*Query and transfer: 5 ms/,
+    /Connection: 0 ms \(reused\).*Checks and schema: 40 ms.*Query and transfer: 5 ms.*Cleanup: 2 ms/,
   );
   await page.getByRole('tab', { name: 'SQL editor', exact: true }).click();
   await page.getByRole('button', { name: 'Run query', exact: true }).click();
@@ -218,7 +225,7 @@ test('schema lists JSON tables and restricted views, and refresh discovers new t
   await expect(page.getByRole('status')).toContainText('structure inspection');
   await expect(page.getByRole('tab', { name: 'Data', exact: true })).toBeDisabled();
   await page.getByRole('tab', { name: 'items', exact: true }).click();
-  await page.getByRole('button', { name: 'Edit row 1 label', exact: true }).click();
+  await editCell(page, 1, 'label');
   await page.getByRole('textbox', { name: 'Cell value row 1 label' }).fill('keep draft');
   await page.keyboard.press('Enter');
   await page.evaluate(() => {
@@ -276,7 +283,7 @@ test('switching connections preserves unsaved cells and guards closing across al
   page,
 }) => {
   await start(page);
-  await page.getByRole('button', { name: 'Edit row 1 label', exact: true }).click();
+  await editCell(page, 1, 'label');
   await page.getByRole('textbox', { name: 'Cell value row 1 label' }).fill('Draft in Alpha');
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Reconnect Beta', exact: true }).click();
@@ -311,7 +318,7 @@ test('same-named tables in separate schemas retain tabs and save to their owning
   await page.getByRole('combobox', { name: 'Select PostgreSQL schema' }).selectOption('audit');
   await page.getByRole('button', { name: 'items', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'items · audit', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Edit row 1 label', exact: true }).click();
+  await editCell(page, 1, 'label');
   await page.getByRole('textbox', { name: 'Cell value row 1 label' }).fill('Audit changed');
   await page.keyboard.press('Enter');
   await page.getByRole('tab', { name: 'items', exact: true }).click();

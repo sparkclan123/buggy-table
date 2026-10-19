@@ -4,6 +4,10 @@ use std::{
     error::Error as _,
     io::ErrorKind,
     net::IpAddr,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -30,6 +34,7 @@ pub struct Profile {
     tls: TlsMode,
     root_ca: Vec<Certificate>,
     pub manual_edits: bool,
+    idle: Mutex<Option<Database>>,
 }
 
 impl Profile {
@@ -90,6 +95,7 @@ impl Profile {
             tls: request.tls,
             root_ca,
             manual_edits: request.manual_edits,
+            idle: Mutex::new(None),
         })
     }
 
@@ -110,7 +116,37 @@ impl Profile {
         }
     }
 
+    /// One transport per workspace. Approved reads use PostgreSQL's implicit
+    /// read-only transactions, so successful reads leave no transaction open.
     pub async fn open(&self) -> AppResult<Database> {
+        let idle = self.idle.lock().ok().and_then(|mut idle| idle.take());
+        if let Some(mut db) = idle
+            && !db.client.is_closed()
+        {
+            db.reused = true;
+            return Ok(db);
+        }
+        self.connect_transport().await
+    }
+
+    pub fn recycle(&self, db: Database) {
+        // Only fully consumed, successful, session-neutral reads are returned.
+        // Saves/counts use dedicated transactions; errors/cancellation close the socket.
+        if db.reusable.load(Ordering::Relaxed)
+            && !db.client.is_closed()
+            && let Ok(mut idle) = self.idle.lock()
+        {
+            *idle = Some(db);
+        }
+    }
+
+    pub async fn open_dedicated(&self) -> AppResult<Database> {
+        let db = self.connect_transport().await?;
+        db.prevent_reuse();
+        Ok(db)
+    }
+
+    async fn connect_transport(&self) -> AppResult<Database> {
         let mut config = Config::new();
         config.host(&self.host).port(self.port).dbname(&self.database).user(&self.username)
             .password(self.password.as_bytes()).application_name("table-por")
@@ -156,11 +192,10 @@ impl Profile {
             tls: self.tls,
             root_ca: self.root_ca.clone(),
             manual_edits: self.manual_edits,
+            reused: false,
+            reusable: AtomicBool::new(true),
+            version: OnceLock::new(),
         };
-        db.client
-            .batch_execute("BEGIN READ ONLY")
-            .await
-            .map_err(query_error)?;
         Ok(db)
     }
 }
@@ -171,11 +206,14 @@ pub struct Database {
     tls: TlsMode,
     root_ca: Vec<Certificate>,
     pub manual_edits: bool,
+    pub reused: bool,
+    reusable: AtomicBool,
+    version: OnceLock<String>,
 }
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // A dedicated connection per operation: no dirty session can enter a pool.
+        // Errors, interrupted work and discarded sessions close the transport immediately.
         self.task.abort();
     }
 }
@@ -231,7 +269,7 @@ fn tls_connector(mode: TlsMode, root_ca: &[Certificate]) -> AppResult<TlsConnect
 fn deadline() -> AppError {
     AppError::new(
         "TIMEOUT",
-        "The operation exceeded its time limit. The dedicated connection was closed.",
+        "The operation exceeded its time limit. The connection was closed.",
     )
 }
 
@@ -289,6 +327,14 @@ pub(crate) fn query_error(error: tokio_postgres::Error) -> AppError {
     // PostgreSQL error detail can contain query literals and row contents. Do not
     // serialize the raw server error or enable driver debug logging.
     match error.as_db_error().map(|e| e.code().code()) {
+        Some("57P01" | "57P02" | "57P03" | "08000" | "08003" | "08006") => AppError::new(
+            "CONNECTION_LOST",
+            "The database connection closed. Reconnect or run a new read; an interrupted query is never replayed.",
+        ),
+        None if error.is_closed() => AppError::new(
+            "CONNECTION_LOST",
+            "The database connection closed. Reconnect or run a new read; an interrupted query is never replayed.",
+        ),
         Some("57014") => AppError::new(
             "QUERY_CANCELLED",
             "PostgreSQL cancelled the query or its 10-second timeout elapsed.",
@@ -368,48 +414,58 @@ fn validate_server_version(version: &str) -> AppResult<()> {
 }
 
 impl Database {
+    pub(crate) fn prevent_reuse(&self) {
+        self.reusable.store(false, Ordering::Relaxed);
+    }
+
     pub async fn preflight(&self) -> AppResult<String> {
-        if !self.manual_edits {
+        // The server version is immutable for this physical connection. Privileges are not.
+        if self.manual_edits
+            && let Some(version) = self.version.get()
+        {
+            return Ok(version.clone());
+        }
+        let version: String = if self.manual_edits {
+            self.client
+                .query_typed_one("SHOW server_version_num", &[])
+                .await
+                .map_err(query_error)?
+                .get(0)
+        } else {
             let role = self.client.query_typed_one(
-            "SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls AS elevated,
-             EXISTS (SELECT 1 FROM pg_roles other WHERE other.oid <> me.oid AND pg_has_role(current_user, other.oid, 'MEMBER')) AS memberships,
-             has_database_privilege(current_database(), 'CREATE') OR has_database_privilege(current_database(), 'TEMP') AS database_write
-             FROM pg_roles me WHERE rolname = current_user", &[]).await.map_err(query_error)?;
-            if role.get::<_, bool>(0) || role.get::<_, bool>(1) || role.get::<_, bool>(2) {
-                return Err(AppError::new(
-                    "UNSAFE_ROLE",
-                    "Use a dedicated reader: no elevated roles, role memberships, database CREATE or TEMP privileges. See docs/DEVELOPMENT.md for the test reader setup.",
-                ));
-            }
-            let unsafe_privileges = self.client.query_typed_one(
-            "SELECT
+            "SELECT current_setting('server_version_num'),
+             rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls,
+             EXISTS (SELECT 1 FROM pg_roles other WHERE other.oid <> me.oid AND pg_has_role(current_user, other.oid, 'MEMBER')),
+             has_database_privilege(current_database(), 'CREATE') OR has_database_privilege(current_database(), 'TEMP'),
              EXISTS (SELECT 1 FROM pg_namespace WHERE has_schema_privilege(oid, 'CREATE')) OR
              EXISTS (SELECT 1 FROM pg_class c WHERE relkind IN ('r','p','v','m','f') AND c.oid <> 'pg_catalog.pg_settings'::regclass AND
                (has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
                 has_any_column_privilege(c.oid, 'INSERT,UPDATE,REFERENCES'))) OR
              EXISTS (SELECT 1 FROM pg_class WHERE CASE WHEN relkind = 'S' THEN has_sequence_privilege(oid, 'USAGE,UPDATE') ELSE false END) OR
              EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-               WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND has_function_privilege(p.oid, 'EXECUTE')) AS unsafe", &[])
-            .await.map_err(query_error)?;
-            if unsafe_privileges.get::<_, bool>(0) {
+               WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND has_function_privilege(p.oid, 'EXECUTE'))
+             FROM pg_roles me WHERE rolname = current_user", &[]).await.map_err(query_error)?;
+            if role.get::<_, bool>(1) || role.get::<_, bool>(2) || role.get::<_, bool>(3) {
+                return Err(AppError::new(
+                    "UNSAFE_ROLE",
+                    "Use a dedicated reader: no elevated roles, role memberships, database CREATE or TEMP privileges. See docs/DEVELOPMENT.md for the test reader setup.",
+                ));
+            }
+            if role.get::<_, bool>(4) {
                 return Err(AppError::new(
                     "UNSAFE_ROLE",
                     "This role can write, create objects, modify sequences or execute custom routines (possibly through PUBLIC). Ask the DBA for a restricted reader; this app does not change server permissions.",
                 ));
             }
-        }
-        let row = self
-            .client
-            .query_typed_one("SHOW server_version_num", &[])
-            .await
-            .map_err(query_error)?;
-        let version: String = row.get(0);
+            role.get(0)
+        };
         validate_server_version(&version)?;
+        let _ = self.version.set(version.clone());
         Ok(version)
     }
 
     pub async fn schemas(&self) -> AppResult<Vec<String>> {
-        let rows = self.client.query("SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE') ORDER BY nspname LIMIT 1001", &[]).await.map_err(query_error)?;
+        let rows = self.client.query_typed("SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE') ORDER BY nspname LIMIT 1001", &[]).await.map_err(query_error)?;
         if rows.len() > 1000 {
             return Err(AppError::new(
                 "SCOPE_TOO_LARGE",
@@ -433,57 +489,54 @@ impl Database {
         if schema.is_empty() || schema.len() > 253 || schema.contains('\0') {
             return Err(AppError::policy("Invalid schema name."));
         }
-        let accessible: bool = self.client.query_typed_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", &[(&schema, Type::TEXT)]).await.map_err(query_error)?.get(0);
-        if !accessible {
+        let schema_params: &[(&(dyn tokio_postgres::types::ToSql + Sync), Type)] =
+            &[(&schema, Type::TEXT)];
+        let scope_params: &[(&(dyn tokio_postgres::types::ToSql + Sync), Type)] =
+            &[(&schema, Type::TEXT), (&table_name, Type::TEXT)];
+        // Independent catalog reads are pipelined on one connection. Their results
+        // never authorize execution until every permission/type check has passed.
+        let accessible = self.client.query_typed_one("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1 AND nspname !~ '^pg_' AND nspname <> 'information_schema' AND has_schema_privilege(oid, 'USAGE'))", schema_params);
+        let relations = self.client.query_typed(
+            "SELECT c.oid, c.relname, c.reltuples::bigint, c.relkind::text, c.relrowsecurity,
+               has_table_privilege(c.oid, 'SELECT'),
+               EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid),
+               has_table_privilege(c.oid, 'DELETE')
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
+               AND ($2::text IS NULL OR c.relname = $2)
+             ORDER BY c.relname LIMIT 5001",
+            scope_params,
+        );
+        let columns = self.client.query_typed(
+            "SELECT a.attrelid, a.attname, t.typname, NOT a.attnotnull,
+               EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
+               a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE'),
+               n.nspname, t.oid, t.typtype::text, t.typelem, COALESCE(e.typtype::text, ''),
+               t.typinput = 'pg_catalog.array_in'::regproc AND t.typoutput = 'pg_catalog.array_out'::regproc,
+               a.attgenerated::text
+             FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+             JOIN pg_namespace n ON n.oid = t.typnamespace
+             LEFT JOIN pg_type e ON e.oid = t.typelem
+             JOIN pg_class c ON c.oid = a.attrelid
+             JOIN pg_namespace scope ON scope.oid = c.relnamespace
+             WHERE scope.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
+               AND ($2::text IS NULL OR c.relname = $2)
+               AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attrelid, a.attnum LIMIT 50001", scope_params);
+        let (accessible, rows, columns) =
+            tokio::try_join!(accessible, relations, columns).map_err(query_error)?;
+        if !accessible.get::<_, bool>(0) {
             return Err(AppError::new(
                 "SCHEMA_UNAVAILABLE",
                 "Schema does not exist or this account has no USAGE permission.",
             ));
         }
-
-        // Discovery is separate from execution policy. Show every relation in
-        // this schema, including those we can only inspect, with a clear reason.
-        let rows = self
-            .client
-            .query_typed(
-                "SELECT c.oid, c.relname, c.reltuples::bigint, c.relkind::text, c.relrowsecurity,
-               has_table_privilege(c.oid, 'SELECT'),
-               EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid),
-               has_table_privilege(c.oid, 'DELETE')
-             FROM pg_class c
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
-               AND ($2::text IS NULL OR c.relname = $2)
-             ORDER BY c.relname LIMIT 5001",
-                &[(&schema, Type::TEXT), (&table_name, Type::TEXT)],
-            )
-            .await
-            .map_err(query_error)?;
         if rows.len() > 5000 {
             return Err(AppError::new(
                 "SCOPE_TOO_LARGE",
                 "This schema exceeds 5,000 tables/views. The catalog was not partially loaded.",
             ));
         }
-        if rows.is_empty() {
-            return Ok(Vec::new());
-        }
-        // One bounded catalog query for every table, rather than one round trip
-        // per table. Re-read privileges and column metadata on EVERY operation;
-        // no stale permission/schema cache is involved.
-        let oids: Vec<u32> = rows.iter().map(|row| row.get(0)).collect();
-        let columns = self.client.query_typed(
-                "SELECT a.attrelid, a.attname, t.typname, NOT a.attnotnull,
-                   EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
-                   a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE'),
-                   n.nspname, t.oid, t.typtype::text, t.typelem, COALESCE(e.typtype::text, ''),
-                   t.typinput = 'pg_catalog.array_in'::regproc AND t.typoutput = 'pg_catalog.array_out'::regproc,
-                   a.attgenerated::text
-                 FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
-                 JOIN pg_namespace n ON n.oid = t.typnamespace
-                 LEFT JOIN pg_type e ON e.oid = t.typelem
-                 WHERE a.attrelid = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attrelid, a.attnum LIMIT 50001", &[(&oids, Type::OID_ARRAY)])
-                .await.map_err(query_error)?;
         if columns.len() > 50000 {
             return Err(AppError::new(
                 "SCOPE_TOO_LARGE",
@@ -571,16 +624,8 @@ impl Database {
         Ok(tables)
     }
 
-    pub async fn approved_tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
-        Ok(self
-            .tables(schema)
-            .await?
-            .into_iter()
-            .filter(|table| table.read_blocked_reason.is_none())
-            .collect())
-    }
-
     async fn cancel(&self) -> bool {
+        self.reusable.store(false, Ordering::Relaxed);
         let token = self.client.cancel_token();
         let result = match self.tls {
             TlsMode::LocalOnly => timeout(Duration::from_secs(2), token.cancel_query(NoTls)).await,
@@ -657,7 +702,7 @@ impl Database {
             _ = async { let _ = cancelled.wait_for(|value| *value).await; } => {
                 let sent = self.cancel().await;
                 Err(AppError::new("CANCELLED", if sent {
-                    "Cancellation requested; the dedicated connection was closed."
+                    "Cancellation requested; the connection was closed."
                 } else { "The connection was closed. Server cancellation could not be confirmed; the server timeout still applies." }))
             },
             _ = tokio::time::sleep(Duration::from_secs(12)) => {
@@ -813,10 +858,11 @@ impl Database {
     }
 
     pub async fn count(&self, table: &TableInfo, request: &BrowseRequest) -> AppResult<RowCount> {
+        self.prevent_reuse();
         let (sql, parameters) = Self::browse_statement(table, request, true)?;
         // An exact count can scan the table: opt-in, time-bounded, never part of page loading.
         self.client
-            .batch_execute("SET LOCAL statement_timeout = '5s'")
+            .batch_execute("BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'")
             .await
             .map_err(query_error)?;
         let params: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), Type)> = parameters
@@ -868,7 +914,7 @@ impl Database {
                 // only signals another page; don't open a separate cancellation
                 // connection (and TLS handshake) for an already bounded query.
                 result.truncated = true;
-                break;
+                continue; // Consume command completion before reusing this transport.
             }
             let values = (0..row.len())
                 .map(|i| row.try_get::<_, Option<String>>(i))
@@ -890,19 +936,19 @@ impl Database {
     }
 
     pub async fn indexes(&self, schema: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
-        self.client.query(
+        self.client.query_typed(
             "SELECT ci.relname, pg_get_indexdef(i.indexrelid), COALESCE(s.idx_scan,0)::text,
              pg_size_pretty(pg_relation_size(ci.oid)), i.indisunique, i.indisprimary
              FROM pg_index i JOIN pg_class ct ON ct.oid = i.indrelid
              JOIN pg_namespace n ON n.oid = ct.relnamespace JOIN pg_class ci ON ci.oid = i.indexrelid
              LEFT JOIN pg_stat_user_indexes s ON s.indexrelid = i.indexrelid
              WHERE n.nspname = $1 AND ct.relname = $2 AND has_table_privilege(ct.oid, 'SELECT')
-             ORDER BY ci.relname LIMIT 100", &[&schema, &table]).await.map_err(query_error)
+             ORDER BY ci.relname LIMIT 100", &[(&schema, Type::TEXT), (&table, Type::TEXT)]).await.map_err(query_error)
             .map(|rows| rows.into_iter().map(|r| IndexInfo { name: r.get(0), definition: r.get(1), scans: r.get(2), size: r.get(3), unique: r.get(4), primary: r.get(5) }).collect())
     }
 
     pub async fn overview(&self) -> AppResult<Overview> {
-        let row = self.client.query_one(
+        let row = self.client.query_typed_one(
             "SELECT current_database(), current_setting('server_version'), pg_size_pretty(pg_database_size(current_database())),
              numbackends::bigint, (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active'),
              xact_commit::text, xact_rollback::text,
@@ -924,25 +970,21 @@ impl Database {
         })
     }
 
-    pub async fn run_validated(
-        &self,
-        sql: &str,
-        schema: &str,
-        explain: bool,
-        cancelled: watch::Receiver<bool>,
-    ) -> AppResult<QueryResult> {
-        let started = Instant::now();
-        self.preflight().await?;
-        let tables = self.approved_tables(schema).await?;
-        let approved = policy::approve(sql, &tables)?;
-        let validation_ms = started.elapsed().as_millis() as u64;
-        let mut result = self.execute(approved.sql(), explain, cancelled).await?;
-        result.timings = Some(QueryTimings {
-            connection_ms: 0,
-            validation_ms,
-            execution_ms: result.elapsed_ms,
-        });
-        Ok(result)
+    pub async fn approve_query(&self, sql: &str, schema: &str) -> AppResult<policy::ApprovedQuery> {
+        let relation = policy::postgres_relation(sql)?;
+        let metadata = async {
+            match relation {
+                Some((ref scope, ref name)) if scope == schema => {
+                    Ok(vec![self.approved_table(scope, name).await?])
+                }
+                Some(_) => Err(AppError::policy(
+                    "This table is outside the selected schema.",
+                )),
+                None => Ok(Vec::new()),
+            }
+        };
+        let (_, tables) = tokio::try_join!(self.preflight(), metadata)?;
+        policy::approve(sql, &tables)
     }
 
     pub async fn stop(&self) {
@@ -1125,11 +1167,14 @@ mod connection_tests {
                 .unwrap();
             let _ = tokio::io::copy_bidirectional(&mut tls, &mut fixture).await;
         });
-        let mut r = request(port, TlsMode::Require);
+        let mut r = request(port, TlsMode::VerifyFull);
+        r.host = "localhost".into();
+        r.root_ca_pem = cert;
         r.database = "tablepor_test".into();
         r.username = "tablepor_reader".into();
         r.password = "local-reader-only".into();
-        let db = Profile::new(r).unwrap().open().await.unwrap();
+        let profile = Profile::new(r).unwrap();
+        let db = profile.open().await.unwrap();
         assert_eq!(
             db.client
                 .query_one("SELECT 1::int4", &[])
@@ -1146,7 +1191,31 @@ mod connection_tests {
                 .get::<_, String>(0),
             "on"
         );
-        drop(db);
+        profile.recycle(db);
+        let reused = profile.open().await.unwrap();
+        assert!(
+            reused.reused,
+            "the TLS proxy accepts exactly one physical connection"
+        );
+        assert_eq!(
+            reused
+                .client
+                .query_typed_one("SELECT 2::int4", &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            2
+        );
+        assert_eq!(
+            reused
+                .client
+                .execute("DELETE FROM public.orders WHERE false", &[])
+                .await
+                .unwrap_err()
+                .code(),
+            Some(&tokio_postgres::error::SqlState::READ_ONLY_SQL_TRANSACTION)
+        );
+        drop(reused);
         proxy.abort();
     }
 }

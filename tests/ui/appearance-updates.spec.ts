@@ -1,3 +1,4 @@
+import { editCell } from './grid-helpers';
 import { test, expect, type Page } from '@playwright/test';
 
 async function updaterStub(
@@ -54,7 +55,7 @@ test('system theme follows OS; explicit choice survives reload and covers editor
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByLabel('Appearance')).toHaveValue('system');
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await expect(page.getByRole('textbox', { name: /^Cell value row/ })).toHaveCSS(
     'background-color',
     'rgb(74, 60, 32)',
@@ -90,7 +91,7 @@ test('update offer blocks dirty tabs, renders release text safely, and recovers 
   await expect(
     page.getByText('<script>unsafe()</script> Release notes', { exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Pending work');
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'customers', exact: true }).click();

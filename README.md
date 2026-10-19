@@ -11,7 +11,7 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - Redis: SCAN คีย์ตาม pattern, ดูค่า/ชนิด/TTL, อ่าน string/hash/list/set/sorted set และรันคำสั่งอ่านแบบ JSON arguments
 - เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว
 - เปิดหลายตารางเป็นแท็บด้านบน เก็บ filter, page, SQL, scroll และ pending edits แยกกัน
-- คลิกเซลล์แล้วพิมพ์ในตารางได้ทันที: Enter จบการแก้ไข, Escape คืนค่าก่อนแก้, Shift+Enter ขึ้นบรรทัดใหม่; Save changes หรือ Cmd/Ctrl+S เพื่อบันทึก และ Discard เพื่อยกเลิก
+- คลิกเซลล์ครั้งแรกเลือกและไฮไลต์ทั้งแถว คลิกเซลล์ในแถวที่เลือกอีกครั้งจึงแก้ไขได้: Enter จบการแก้ไข, Escape คืนค่าก่อนแก้, Shift+Enter ขึ้นบรรทัดใหม่; Save changes หรือ Cmd/Ctrl+S เพื่อบันทึก และ Discard เพื่อยกเลิก
 - ลากขอบหัวคอลัมน์เพื่อปรับความกว้าง ดับเบิลคลิกขอบเพื่อคืนขนาดเดิม หรือโฟกัสขอบแล้วกดลูกศรซ้าย/ขวา
 - คลิกหัวคอลัมน์เพื่อ sort ASC/DESC จากฐานข้อมูลก่อนแบ่งหน้า; เก็บความกว้างและการเรียงแยกตามแท็บ
 - เพิ่ม/ลบ filter ได้สูงสุด 20 เงื่อนไข เลือก AND/OR แล้ว Apply filters
@@ -41,7 +41,10 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - Timestamp พิมพ์เองหรือใช้ปฏิทิน/เวลาได้ทั้งการแก้ไขและ filter โดยรักษา offset และเศษวินาที; filter ใช้สัญลักษณ์พร้อมคำอธิบายเมื่อชี้เมาส์
 - แบ่งหน้า 50 รายการเริ่มต้น เลือก 100/250/500 ได้; แสดงจำนวนประมาณก่อน และ Count exact สำหรับนับตาม filter โดยมี query timeout 5 วินาที
 - Full values เปิดการตัดบรรทัดเพื่อดูค่าเต็มในหน้าปัจจุบัน (ปิดเป็นค่าเริ่มต้น); คอลัมน์ # ตรึงเมื่อเลื่อนแนวนอน
+- Row details ข้าง Full values เปิด/ปิดแถบดูข้อมูลด้านขวา: เริ่มกว้าง 10% ของพื้นที่ตาราง ลากขยาย/ย่อและปิดด้วย × ได้ จดจำค่าเปิด–ปิดและความกว้างเฉพาะเครื่อง แสดงค่าเต็มเรียงแนวตั้ง เลื่อนดูได้ และจัด JSON/JSONB ให้อ่านง่ายโดยคงตัวเลข/ทศนิยมเดิม; ใช้ข้อมูลที่โหลดแล้ว ไม่ query เพิ่ม
+- สีแก้ไขและสีแดงเตรียมลบเด่นกว่าสีเลือกแถว; แถบ Row details อ่านอย่างเดียวและแสดง draft ล่าสุด โดยไม่บันทึกข้อมูลแถวลง storage
 - ปุ่มข้าง Refresh หุบ/กางแถบเครื่องมือ; Cmd/Ctrl+W ปิดแท็บปัจจุบันพร้อมตรวจงานค้าง; scrollbar แท็บเล็กลง
+- PostgreSQL ใช้ connection เดิมต่อสำหรับการอ่าน และส่ง metadata checks แบบ pipelining; SQL ตรวจเฉพาะตารางที่อ้างถึง พร้อมแสดงเวลาแต่ละช่วงและสถานะ connection reuse
 - Overview PostgreSQL/MySQL และ Redis INFO แสดงกราฟจาก snapshot จริง เก็บประวัติ 30 ครั้งในหน่วยความจำจากการ refresh ด้วยตนเอง
 - Redis SCAN แสดงแต่ละคีย์เป็นแถว รวมผล Next scan โดยตัดคีย์ซ้ำ; ค้นหาด้วย Enter และคำสั่ง SCAN ให้ผลรูปแบบเดียวกัน
 - MySQL รองรับ CA PEM ส่วนตัว และแยกข้อความผิดพลาดการเชื่อมต่อเป็น network/TLS/auth/permission/server compatibility

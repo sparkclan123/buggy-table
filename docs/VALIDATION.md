@@ -1,5 +1,42 @@
 # Validation history
 
+## Row selection and read-only inspector — 0.1.8 Preview, 2026-10-19
+
+- First activation selects the entire row; a subsequent activation within that selected row opens an eligible editor. Ordinary typing, including Space, cannot accidentally open an editor. Immutable/read-only cells also select rows. Edited cells and pending deletions override selection colors in both themes, including hover and active editors.
+- Row details sits on the right, starts at 10% of the table area, and supports pointer/keyboard resizing, close/reopen and a persistent checkbox beside Full values. It renders the selected row vertically with complete scrollable values and staged drafts. JSON formatting preserves original number tokens, decimal precision, key order, duplicate keys and escapes; timestamp/array/other database strings are not converted. Only display preferences persist, not row data.
+- Final production-preview Playwright run: **96 passed**, Chromium and WebKit. The 12 new browser cases cover the two-stage mouse/keyboard interaction, accidental typing, immutable cells, multi-selection, theme priority, deletion/restore, inspector close/reopen, 10% width, pointer/keyboard resizing and persistence, disabled/storage-failure behavior, refresh clearing stale selections, long JSON scrolling, exact numerics/timestamps/NULL/empty values, safe HTML-as-text rendering and no additional browse/query/count calls during inspection. Typed database UI cases use explicit IPC doubles. Existing save/filter/sort/page/tab/connection cases also pass.
+- **8 frontend unit tests passed**, including precision-preserving JSON formatting, invalid drafts, type-specific raw strings and bounded indentation for deeply nested JSON. Svelte/TypeScript has zero errors/warnings; the production frontend build, Prettier, rustfmt and whitespace checks pass. Compact/expanded JSON and light/dark screenshots were visually inspected.
+- No backend code was changed for this feature. The preceding PostgreSQL performance changes are included in 0.1.8; their database evidence is recorded below. The running native app and disposable PostgreSQL fixture were left untouched during UI validation. Final cross-platform installer provenance and CI results are recorded in the release's BUILD_INFO.txt.
+
+## PostgreSQL transport performance — 0.1.8 Preview, 2026-10-19
+
+Changes: reuse one read connection per workspace, use implicit read-only transactions with fixed startup defaults, pipeline independent fresh catalog/privilege checks, and load SQL metadata only for the referenced relation. Version metadata is cached per physical connection; table/permission/result data is not cached. Saves and exact counts use separate connections, and a session touched by either path cannot enter the read slot. Dead reused transports may reconnect once before user SQL is sent; interrupted SQL and saves are never replayed.
+
+Comparison: release-mode baseline built from published source commit `e4bd428f9f79e56ba0bc4510d61c31a389895e2c` (0.1.7), versus the working tree after this change. Both use PostgreSQL 17, 100 synthetic tables, the same loopback TCP proxy and fixture data, one warmup then nine samples. The delay is injected per forwarded TCP chunk in each direction, not an exact WAN RTT model. Times include backend connection/validation/execution/result conversion; IPC and UI rendering are excluded. These synthetic measurements do not establish the latency of the user's external database. Raw JSONL evidence is retained locally in `artifacts/performance-session-reuse-2026-10-19/` (ignored generated artifacts).
+
+| Delay per direction/chunk | Mode | Operation | Before median | After median | Before P95 | After P95 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 25 ms | manual | query (200 rows) | 545.43 ms | 138.81 ms | 551.81 ms | 166.26 ms |
+| 25 ms | manual | browse (50 rows) | 514.20 ms | 139.24 ms | 519.02 ms | 165.62 ms |
+| 25 ms | strict | query (200 rows) | 696.50 ms | 142.87 ms | 701.81 ms | 145.69 ms |
+| 25 ms | strict | browse (50 rows) | 665.94 ms | 143.55 ms | 669.00 ms | 144.97 ms |
+| 0 ms | manual | query (200 rows) | 9.76 ms | 1.64 ms | 10.52 ms | 2.83 ms |
+| 0 ms | manual | browse (50 rows) | 6.20 ms | 1.40 ms | 7.28 ms | 1.65 ms |
+| 0 ms | strict | query (200 rows) | 29.45 ms | 2.67 ms | 30.55 ms | 2.79 ms |
+| 0 ms | strict | browse (50 rows) | 28.62 ms | 2.45 ms | 39.78 ms | 2.65 ms |
+
+All nine measured samples reused the same physical connection in each mode, with one transport opened across connection setup plus both operation loops. At the 25 ms setting, initial connection/catalog discovery took 275 ms (manual) / 290 ms (strict); warm connection acquisition and local cleanup each rounded to 0 ms. On loopback without injected delay, warm backend reads took 1.4–2.7 ms. P95 with nine samples is the maximum and is a regression probe, not a production SLO.
+
+Validation:
+
+- PostgreSQL 15/16/17/18: 28 integration cases passed on each version, followed by the additional save-trigger session-isolation case on each (29 cases per major). Coverage includes reuse without an idle transaction, disconnect cleanup, reconnect after backend termination, disposal after failed/cancelled reads, permission drift, fresh schema metadata, count isolation and unchanged atomic saves. A fixture trigger changes session settings during Save; subsequent reads retain the original clean backend.
+- Verified TLS reuse test passed on each PostgreSQL major using a short-lived private CA and a local proxy accepting exactly one physical connection; a second read reuses it and a direct write remains server-denied.
+- 17 Rust unit/transport tests and 5 frontend unit tests passed. Clippy with warnings denied, rustfmt, Prettier and Svelte/TypeScript checks pass.
+- 16 Chromium/WebKit connection-workspace UI cases passed, including total timing, reused-connection detail, schema refresh, draft retention and connection/schema isolation. These browser cases use explicit IPC doubles; real database behavior is covered by the Rust tests above.
+- macOS ARM64 release-mode app built (15.84 MiB) and passed strict/deep ad-hoc codesign verification. Through actual Tauri IPC, a session-only connection to the loopback fixture opened 50 order rows, refreshed with connection reuse visible (4–6 ms backend total), and counted the correct 450 rows in 12 ms. The build and disposable PostgreSQL fixture remain open for local inspection; saved production connections were not connected. Native SQL execution itself was covered by Rust integration tests, not a completed SQL-editor smoke action in this run.
+
+This work is not yet part of the published 0.1.7 installers. No production database or saved user credential was used. MySQL/Redis transport optimizations, keyset pagination, real WAN profiling and OS-wide egress/resource soak testing are outside this change.
+
 ## Grid and issue fixes — 0.1.7 Preview, 2026-10-19
 
 - Open source issues #3–#6 were read and addressed in code: actionable MySQL connection errors/private CA, PostgreSQL/MySQL snapshot graphs, Redis INFO graphs, and Redis SCAN key records. No issue comments or closures were posted.

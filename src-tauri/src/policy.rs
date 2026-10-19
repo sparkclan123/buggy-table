@@ -39,6 +39,50 @@ pub fn approve(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
     approve_dialect(sql, tables, &PostgreSqlDialect {})
 }
 
+/// Metadata lookup hint only. The complete query still goes through `approve`
+/// after fresh relation/type/permission checks; this never authorizes SQL.
+pub fn postgres_relation(sql: &str) -> AppResult<Option<(String, String)>> {
+    if sql.is_empty() || sql.len() > MAX_SQL_BYTES {
+        return Err(AppError::policy("Use a query between 1 and 32,768 bytes."));
+    }
+    let statements = Parser::new(&PostgreSqlDialect {})
+        .with_recursion_limit(32)
+        .try_with_sql(sql)
+        .and_then(|mut parser| parser.parse_statements())
+        .map_err(|_| AppError::policy("This SQL could not be parsed as a supported SELECT."))?;
+    let [Statement::Query(query)] = statements.as_slice() else {
+        return Err(AppError::policy(
+            "Run exactly one SELECT statement at a time.",
+        ));
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return Err(AppError::policy("Use a single SELECT."));
+    };
+    if select.from.is_empty() {
+        return Ok(None);
+    }
+    if select.from.len() != 1 || !select.from[0].joins.is_empty() {
+        return Err(AppError::policy(
+            "This version reads one approved table per query.",
+        ));
+    }
+    let TableFactor::Table { name, .. } = &select.from[0].relation else {
+        return Err(AppError::policy("Only approved base tables are supported."));
+    };
+    let parts = name
+        .0
+        .iter()
+        .map(|part| part.as_ident())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| AppError::policy("Unsupported table reference."))?;
+    if parts.len() != 2 {
+        return Err(AppError::policy(
+            "Use a schema-qualified table name, for example public.orders.",
+        ));
+    }
+    Ok(Some((identifier(parts[0]), identifier(parts[1]))))
+}
+
 pub fn approve_mysql(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
     // Keep parsing independent of server SQL modes and executable comments.
     if sql.contains('\\') || sql.contains("/*") || sql.contains('"') {

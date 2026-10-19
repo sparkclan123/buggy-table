@@ -514,8 +514,136 @@ pre,
 }
 
 /* Fixed-width columns and a virtualized, monochrome grid. */
+.result-area {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.inspector-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inspector-toggle input {
+  margin: 0;
+  accent-color: var(--focus);
+}
+.row-inspector {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  flex-shrink: 0;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--canvas);
+  font-size: 11px;
+}
+.inspector-resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.inspector-resizer:hover,
+.inspector-resizer:focus-visible {
+  background: var(--resize);
+  outline: 1px solid var(--focus);
+}
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 3px 4px 3px 8px;
+  min-height: 29px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.inspector-header > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.inspector-header button {
+  flex-shrink: 0;
+}
+.inspector-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.inspector-scroll:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: -1px;
+}
+.inspector-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.inspector-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+.inspector-caption {
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.inspector-scroll dl,
+.inspector-scroll dd,
+.inspector-scroll pre {
+  margin: 0;
+}
+.inspector-field {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.inspector-field dt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+}
+.inspector-name {
+  font-weight: 600;
+}
+.inspector-field small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.inspector-field pre {
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.inspector-field.inspector-edited {
+  background: var(--edit-bg);
+}
+.inspector-field.inspector-deleted {
+  background: var(--delete-bg);
+  color: var(--delete-ink);
+}
 .grid-scroll {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   position: relative;
@@ -608,6 +736,7 @@ pre,
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.cell-text,
 .editable-cell {
   font: inherit;
   line-height: 27px;
@@ -616,6 +745,7 @@ pre,
   border-radius: 0;
   background: transparent;
 }
+.cell-text:hover,
 .editable-cell:hover {
   background: var(--hover);
 }
@@ -1354,13 +1484,19 @@ pre,
 .data-table td.editing .cell-input {
   background: var(--edit-bg);
 }
-.data-table tr.row-selected:not(.pending-delete) td:not(.edited) {
+.data-table tr.row-selected:not(.pending-delete) td:not(.edited):not(.editing) {
   background: var(--row-selected);
 }
 .data-table tr.pending-delete td {
   background: var(--delete-bg);
   color: var(--delete-ink);
   box-shadow: inset 0 -1px var(--delete-border);
+}
+.data-table tr.row-selected .editable-cell:hover,
+.data-table tr.row-selected .cell-text:hover,
+.data-table tr.row-selected .row-select:hover,
+.data-table tr.pending-delete button:hover {
+  background: transparent;
 }
 .data-table .row-number {
   position: sticky;

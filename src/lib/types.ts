@@ -48,7 +48,13 @@ export interface QueryResult {
   columns: string[];
   rows: (string | null)[][];
   elapsedMs: number;
-  timings?: { connectionMs: number; validationMs: number; executionMs: number };
+  timings?: {
+    connectionMs: number;
+    connectionReused?: boolean;
+    cleanupMs?: number;
+    validationMs: number;
+    executionMs: number;
+  };
   truncated: boolean;
   sql: string;
 }

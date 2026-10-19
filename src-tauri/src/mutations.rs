@@ -9,15 +9,16 @@ use tokio_postgres::types::ToSql;
 
 impl Database {
     pub async fn save(&self, schema: &str, request: &SaveRequest) -> AppResult<SaveResult> {
+        self.prevent_reuse();
         if !self.manual_edits {
             return Err(AppError::policy("Manual editing is disabled."));
         }
         validate_size(request)?;
         self.preflight().await?;
-        // Reads use their own read-only connections. Only this typed path starts
+        // Reads use read-only sessions. Only this dedicated typed path starts
         // a write transaction; dropping this dedicated connection rolls it back.
         self.client
-            .batch_execute("ROLLBACK; BEGIN READ WRITE")
+            .batch_execute("BEGIN READ WRITE")
             .await
             .map_err(query_error)?;
         let table_sql = format!(

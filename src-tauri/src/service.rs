@@ -12,10 +12,17 @@ use std::{
 use tokio::sync::{RwLock, watch};
 use uuid::Uuid;
 
-use crate::{models::*, mysql, postgres::Profile, redis_store, remote_profile::RemoteProfile};
+use crate::{
+    models::*,
+    mysql,
+    policy::ApprovedQuery,
+    postgres::{Database, Profile},
+    redis_store,
+    remote_profile::RemoteProfile,
+};
 
 enum Session {
-    Postgres(Profile),
+    Postgres(Box<Profile>),
     Mysql(RemoteProfile),
     Redis(RemoteProfile),
 }
@@ -62,6 +69,29 @@ enum Operation {
     Browse(BrowseRequest),
 }
 
+enum PreparedRead {
+    Sql(ApprovedQuery),
+    Browse(TableInfo),
+}
+
+impl Operation {
+    async fn prepare(&self, db: &Database, schema: &str) -> AppResult<PreparedRead> {
+        match self {
+            Self::Sql(request) => Ok(PreparedRead::Sql(
+                db.approve_query(&request.sql, request.schema.as_deref().unwrap_or(schema))
+                    .await?,
+            )),
+            Self::Browse(request) => {
+                let (_, table) = tokio::try_join!(
+                    db.preflight(),
+                    db.approved_table(request.schema.as_deref().unwrap_or(schema), &request.table)
+                )?;
+                Ok(PreparedRead::Browse(table))
+            }
+        }
+    }
+}
+
 pub struct UpdateGuard<'a>(&'a Workbench);
 impl Drop for UpdateGuard<'_> {
     fn drop(&mut self) {
@@ -86,7 +116,7 @@ impl Workbench {
         let id = Uuid::new_v4().to_string();
         let (_connection_job, _) = self.register_job(&id, &id)?;
         let profile = Arc::new(match request.engine {
-            Engine::Postgres => Session::Postgres(Profile::new(request)?),
+            Engine::Postgres => Session::Postgres(Box::new(Profile::new(request)?)),
             Engine::Mysql => Session::Mysql(RemoteProfile::new(request)?),
             Engine::Redis => Session::Redis(RemoteProfile::new(request)?),
         });
@@ -94,8 +124,8 @@ impl Workbench {
             match profile.as_ref() {
                 Session::Postgres(p) => {
                     let db = p.open().await?;
-                    let version = db.preflight().await?;
-                    let tables = db.tables(&p.schema).await?;
+                    let (version, tables) = tokio::try_join!(db.preflight(), db.tables(&p.schema))?;
+                    p.recycle(db);
                     Ok(p.info(id.clone(), version, tables))
                 }
                 Session::Mysql(p) => mysql::connect(p, id.clone()).await,
@@ -211,14 +241,15 @@ impl Workbench {
                     return mysql::count(p, &request).await;
                 }
                 let profile = profile.postgres()?;
-                let db = profile.open().await?;
-                db.preflight().await?;
-                let table = db
-                    .approved_table(
+                // SET LOCAL count timeout is isolated from reusable read sessions.
+                let db = profile.open_dedicated().await?;
+                let (_, table) = tokio::try_join!(
+                    db.preflight(),
+                    db.approved_table(
                         request.schema.as_deref().unwrap_or(&profile.schema),
-                        &request.table,
+                        &request.table
                     )
-                    .await?;
+                )?;
                 db.count(&table, &request).await
             },
             cancelled,
@@ -239,7 +270,8 @@ impl Workbench {
             ));
         }
         let work = async {
-            let db = profile.open().await?;
+            // Writes can execute triggers that change session state. Never pool them.
+            let db = profile.open_dedicated().await?;
             db.save(
                 request.schema.as_deref().unwrap_or(&profile.schema),
                 &request,
@@ -277,37 +309,57 @@ impl Workbench {
         }
         let profile = profile.postgres()?;
         let connecting = Instant::now();
-        let db = tokio::select! {
+        let mut db = tokio::select! {
             result = profile.open() => result?,
             _ = async { let _ = cancelled.wait_for(|value| *value).await; } => return Err(AppError::new("CANCELLED", "Connection attempt cancelled.")),
         };
-        let connection_ms = connecting.elapsed().as_millis() as u64;
+        let mut connection_ms = connecting.elapsed().as_millis() as u64;
+        let operation_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let validating = Instant::now();
+        let mut prepared = bounded_metadata_until(
+            operation.prepare(&db, &profile.schema),
+            cancelled.clone(),
+            operation_deadline,
+        )
+        .await;
+        let mut validation_ms = validating.elapsed().as_millis() as u64;
+        // Only fixed catalog checks may be retried, and only on a dead reused
+        // transport. No user SELECT or save has been sent at this point.
+        if db.reused
+            && prepared
+                .as_ref()
+                .is_err_and(|e| e.code == "CONNECTION_LOST")
+        {
+            drop(db);
+            let reconnecting = Instant::now();
+            db = bounded_metadata_until(profile.open(), cancelled.clone(), operation_deadline)
+                .await?;
+            connection_ms += reconnecting.elapsed().as_millis() as u64;
+            let validating = Instant::now();
+            prepared = bounded_metadata_until(
+                operation.prepare(&db, &profile.schema),
+                cancelled.clone(),
+                operation_deadline,
+            )
+            .await;
+            validation_ms += validating.elapsed().as_millis() as u64;
+        }
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if matches!(error.code, "CANCELLED" | "TIMEOUT") {
+                    db.stop().await;
+                }
+                return Err(error);
+            }
+        };
         let work = async {
-            match &operation {
-                Operation::Sql(r) => {
-                    db.run_validated(
-                        &r.sql,
-                        r.schema.as_deref().unwrap_or(&profile.schema),
-                        r.explain,
-                        cancelled.clone(),
-                    )
-                    .await
+            match (&operation, prepared) {
+                (Operation::Sql(r), PreparedRead::Sql(sql)) => {
+                    db.execute(sql.sql(), r.explain, cancelled.clone()).await
                 }
-                Operation::Browse(r) => {
-                    let validating = Instant::now();
-                    db.preflight().await?;
-                    let table = db
-                        .approved_table(r.schema.as_deref().unwrap_or(&profile.schema), &r.table)
-                        .await?;
-                    let validation_ms = validating.elapsed().as_millis() as u64;
-                    let mut result = db.browse(&table, r).await?;
-                    result.timings = Some(QueryTimings {
-                        connection_ms: 0,
-                        validation_ms,
-                        execution_ms: result.elapsed_ms,
-                    });
-                    Ok(result)
-                }
+                (Operation::Browse(r), PreparedRead::Browse(table)) => db.browse(&table, r).await,
+                _ => Err(internal_error()),
             }
         };
         let mut stop = cancelled.clone();
@@ -317,15 +369,24 @@ impl Workbench {
                 db.stop().await;
                 Err(AppError::new("CANCELLED", "Cancellation requested. This operation's connection has been closed."))
             },
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+            _ = tokio::time::sleep_until(operation_deadline) => {
                 db.stop().await;
                 Err(AppError::new("TIMEOUT", "Operation exceeded 15 seconds; cancellation requested and connection closed."))
             },
         }?;
+        let connection_reused = db.reused;
+        let cleanup = Instant::now();
+        profile.recycle(db);
+        let cleanup_ms = cleanup.elapsed().as_millis() as u64;
+        let execution_ms = result.elapsed_ms;
         result.elapsed_ms = started.elapsed().as_millis() as u64;
-        if let Some(timings) = &mut result.timings {
-            timings.connection_ms = connection_ms;
-        }
+        result.timings = Some(QueryTimings {
+            connection_ms,
+            connection_reused,
+            validation_ms,
+            execution_ms,
+            cleanup_ms,
+        });
         Ok(result)
     }
 
@@ -354,13 +415,11 @@ impl Workbench {
         bounded_metadata(
             async {
                 let db = profile.open().await?;
-                db.preflight().await?;
                 let schema = schema.unwrap_or(&profile.schema);
-                let tables = db.approved_tables(schema).await?;
-                if !tables.iter().any(|t| t.name == table_name) {
-                    return Err(AppError::policy("Table is outside the approved scope."));
-                }
-                db.indexes(schema, table_name).await
+                tokio::try_join!(db.preflight(), db.approved_table(schema, table_name))?;
+                let result = db.indexes(schema, table_name).await?;
+                profile.recycle(db);
+                Ok(result)
             },
             cancelled,
         )
@@ -375,8 +434,9 @@ impl Workbench {
         bounded_metadata(
             async {
                 let db = profile.open().await?;
-                db.preflight().await?;
-                db.schemas().await
+                let (_, result) = tokio::try_join!(db.preflight(), db.schemas())?;
+                profile.recycle(db);
+                Ok(result)
             },
             cancelled,
         )
@@ -395,8 +455,9 @@ impl Workbench {
         bounded_metadata(
             async {
                 let db = profile.open().await?;
-                db.preflight().await?;
-                db.tables(schema).await
+                let (_, result) = tokio::try_join!(db.preflight(), db.tables(schema))?;
+                profile.recycle(db);
+                Ok(result)
             },
             cancelled,
         )
@@ -426,8 +487,9 @@ impl Workbench {
         bounded_metadata(
             async {
                 let db = profile.open().await?;
-                db.preflight().await?;
-                db.overview().await
+                let (_, result) = tokio::try_join!(db.preflight(), db.overview())?;
+                profile.recycle(db);
+                Ok(result)
             },
             cancelled,
         )
@@ -437,12 +499,25 @@ impl Workbench {
 
 async fn bounded_metadata<T>(
     work: impl Future<Output = AppResult<T>>,
+    cancelled: watch::Receiver<bool>,
+) -> AppResult<T> {
+    bounded_metadata_until(
+        work,
+        cancelled,
+        tokio::time::Instant::now() + Duration::from_secs(15),
+    )
+    .await
+}
+
+async fn bounded_metadata_until<T>(
+    work: impl Future<Output = AppResult<T>>,
     mut cancelled: watch::Receiver<bool>,
+    deadline: tokio::time::Instant,
 ) -> AppResult<T> {
     tokio::select! {
         result = work => result,
         _ = async { let _ = cancelled.wait_for(|value| *value).await; } => Err(AppError::new("CANCELLED", "Metadata connection closed after disconnect.")),
-        _ = tokio::time::sleep(Duration::from_secs(15)) => Err(AppError::new("TIMEOUT", "Metadata operation timed out and its connection was closed.")),
+        _ = tokio::time::sleep_until(deadline) => Err(AppError::new("TIMEOUT", "Metadata operation timed out and its connection was closed.")),
     }
 }
 

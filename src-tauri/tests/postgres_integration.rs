@@ -138,7 +138,157 @@ async fn reader_can_browse_query_inspect_and_observe() {
 
 fn assert_total_timings(result: &QueryResult) {
     let timing = result.timings.as_ref().expect("PostgreSQL stage timings");
-    assert!(result.elapsed_ms >= timing.connection_ms + timing.validation_ms + timing.execution_ms);
+    assert!(
+        result.elapsed_ms
+            >= timing.connection_ms
+                + timing.validation_ms
+                + timing.execution_ms
+                + timing.cleanup_ms
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn warm_reads_reuse_one_idle_backend_and_recover_from_a_closed_socket() {
+    let app = Workbench::default();
+    let info = app.connect(request()).await.unwrap();
+    let (admin, task) = admin().await;
+    let backend = admin.query_one("SELECT pid, state, xact_start IS NULL FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_reader'", &[]).await.unwrap();
+    let pid: i32 = backend.get(0);
+    assert_eq!(backend.get::<_, String>(1), "idle");
+    assert!(
+        backend.get::<_, bool>(2),
+        "idle connections must not retain a transaction"
+    );
+    for _ in 0..3 {
+        let result = app.browse(browse(&info.id)).await.unwrap();
+        assert!(result.timings.unwrap().connection_reused);
+    }
+    app.count(browse(&info.id)).await.unwrap();
+    app.schemas(&info.id).await.unwrap();
+    let backend = admin
+        .query_one(
+            "SELECT state, xact_start IS NULL FROM pg_stat_activity WHERE pid = $1",
+            &[&pid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(backend.get::<_, String>(0), "idle");
+    assert!(backend.get::<_, bool>(1));
+    assert!(
+        admin
+            .query_one("SELECT pg_terminate_backend($1)", &[&pid])
+            .await
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    let recovered = app.query(query(&info.id, "SELECT 1")).await.unwrap();
+    assert_eq!(recovered.rows[0][0].as_deref(), Some("1"));
+    assert!(!recovered.timings.unwrap().connection_reused);
+    assert!(
+        app.query(query(&info.id, "SELECT 1"))
+            .await
+            .unwrap()
+            .timings
+            .unwrap()
+            .connection_reused
+    );
+    app.disconnect(&info.id).await.unwrap();
+    // Socket shutdown is asynchronous; verify that disconnect releases the idle backend.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let count: i64 = admin.query_one("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_reader'", &[]).await.unwrap().get(0);
+            if count == 0 { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn failed_reads_discard_the_backend_and_never_replay_the_query() {
+    let app = Workbench::default();
+    let info = app.connect(request()).await.unwrap();
+    assert!(app.query(query(&info.id, "SELECT 1 / 0")).await.is_err());
+    let next = app.query(query(&info.id, "SELECT 42")).await.unwrap();
+    assert_eq!(next.rows[0][0].as_deref(), Some("42"));
+    assert!(!next.timings.unwrap().connection_reused);
+    assert!(
+        app.query(query(&info.id, "SELECT 42"))
+            .await
+            .unwrap()
+            .timings
+            .unwrap()
+            .connection_reused
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn save_trigger_session_changes_cannot_contaminate_reused_reads() {
+    let (admin, task) = admin().await;
+    let schema = format!("pool_{}", Uuid::new_v4().simple());
+    admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema};
+        GRANT USAGE ON SCHEMA {schema} TO tablepor_editor;
+        CREATE TABLE {schema}.items(id integer PRIMARY KEY, label text);
+        INSERT INTO {schema}.items VALUES(1, 'before');
+        GRANT SELECT, UPDATE ON {schema}.items TO tablepor_editor;
+        CREATE FUNCTION {schema}.change_session() RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN
+            PERFORM pg_catalog.set_config('search_path', 'public', false);
+            PERFORM pg_catalog.set_config('default_transaction_read_only', 'off', false);
+            PERFORM pg_catalog.set_config('application_name', 'fixture-write-session', false);
+            RETURN NEW;
+        END $body$;
+        CREATE TRIGGER change_session BEFORE UPDATE ON {schema}.items
+            FOR EACH ROW EXECUTE FUNCTION {schema}.change_session();"
+        ))
+        .await
+        .unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.username = "tablepor_editor".into();
+    settings.password = "local-editor-only".into();
+    settings.manual_edits = true;
+    settings.schema = schema.clone();
+    let info = app.connect(settings).await.unwrap();
+    let pid: i32 = admin.query_one("SELECT pid FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_editor'", &[]).await.unwrap().get(0);
+    let save = SaveRequest {
+        connection_id: info.id.clone(),
+        request_id: Uuid::new_v4().to_string(),
+        schema: Some(schema.clone()),
+        table: "items".into(),
+        rows: vec![RowChange {
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("before".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("after".into()))].into(),
+            delete: false,
+        }],
+    };
+    let saved = app.save(save).await;
+    let mut read = query(&info.id, &format!("SELECT label FROM {schema}.items"));
+    read.schema = Some(schema.clone());
+    let read = app.query(read).await;
+    let unchanged = admin.query_opt("SELECT state, xact_start IS NULL FROM pg_stat_activity WHERE pid = $1 AND application_name = 'table-por'", &[&pid]).await.unwrap();
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    task.abort();
+    assert_eq!(saved.unwrap().updated_rows, 1);
+    let read = read.unwrap();
+    assert_eq!(read.rows[0][0].as_deref(), Some("after"));
+    assert!(read.timings.unwrap().connection_reused);
+    let backend = unchanged.expect("writes must not replace or modify the reusable read session");
+    assert_eq!(backend.get::<_, String>(0), "idle");
+    assert!(backend.get::<_, bool>(1));
 }
 
 #[tokio::test]
@@ -379,6 +529,10 @@ async fn result_limits_keep_payload_bounded_and_allow_next_operation() {
     assert_eq!(data.rows.len(), 1000);
     let again = app.query(query(&info.id, "SELECT 1")).await.unwrap();
     assert_eq!(again.rows[0][0].as_deref(), Some("1"));
+    assert!(
+        !again.timings.unwrap().connection_reused,
+        "cancelled transports must not return to the idle slot"
+    );
     app.disconnect(&info.id).await.unwrap();
     admin
         .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))

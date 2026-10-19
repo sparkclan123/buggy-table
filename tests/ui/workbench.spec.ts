@@ -1,3 +1,4 @@
+import { editCell } from './grid-helpers';
 import { expect, test } from '@playwright/test';
 
 test('sample browsing, filters and pagination work without external requests', async ({ page }) => {
@@ -67,7 +68,7 @@ test('table tabs retain edits, filters and pages; Save persists and Discard rest
 }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Edited locally');
   await page.keyboard.press('Enter');
   await expect(page.getByText('1 row with unsaved changes')).toBeVisible();
@@ -89,7 +90,7 @@ test('table tabs retain edits, filters and pages; Save persists and Discard rest
   await expect(page.getByRole('button', { name: 'Edit row 1 customer', exact: true })).toHaveText(
     'Edited locally',
   );
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Discard me');
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
@@ -110,7 +111,7 @@ test('table tabs retain edits, filters and pages; Save persists and Discard rest
 test('NULL edits and closing dirty tabs require an explicit choice', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'customers', exact: true }).click();
-  await page.getByRole('button', { name: 'Edit row 1 email', exact: true }).click();
+  await editCell(page, 1, 'email');
   await page.getByRole('button', { name: 'Set row 1 email to NULL' }).click();
   await page.getByRole('tab', { name: 'SQL editor', exact: true }).click();
   await page.getByRole('tab', { name: 'Data', exact: true }).click();
@@ -128,7 +129,7 @@ test('NULL edits and closing dirty tabs require an explicit choice', async ({ pa
   await expect(page.getByRole('button', { name: 'Edit row 1 email', exact: true })).toHaveText(
     'NULL',
   );
-  await page.getByRole('button', { name: 'Edit row 1 name', exact: true }).click();
+  await editCell(page, 1, 'name');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Do not save');
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Close customers tab' }).click();
@@ -160,7 +161,7 @@ test('editing happens inside the cell, Escape reverts, and save/refresh shortcut
 }) => {
   await page.goto('/');
   const cell = page.getByRole('button', { name: 'Edit row 1 customer', exact: true });
-  await cell.click();
+  await editCell(page, 1, 'customer');
   const input = page.getByRole('textbox', { name: 'Cell value row 1 customer', exact: true });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await input.evaluate((node) => !!node.closest('td'))).toBe(true);
@@ -168,7 +169,7 @@ test('editing happens inside the cell, Escape reverts, and save/refresh shortcut
   await input.press('Escape');
   await expect(cell).toHaveText('Mali S.');
   await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toHaveCount(0);
-  await cell.click();
+  await editCell(page, 1, 'customer');
   await input.fill('Inline saved');
   await input.press('Control+s');
   await expect(page.getByText('1 row saved in the local sample only.')).toBeVisible();
@@ -181,7 +182,7 @@ test('editing happens inside the cell, Escape reverts, and save/refresh shortcut
     await expect(cell).toHaveText('Inline saved');
     expect(await page.evaluate(() => document.body.dataset.refreshCanary)).toBe('same-document');
   }
-  await cell.click();
+  await editCell(page, 1, 'customer');
   await input.fill('Unsaved inline');
   await input.press('F5');
   await expect(page.getByRole('alert')).toContainText('Save or discard');
@@ -231,7 +232,7 @@ test('header sorting covers the whole dataset before paging and respects pending
   await expect(page.getByRole('button', { name: 'Edit row 1 total', exact: true })).toHaveText(
     '5500.00',
   );
-  await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
+  await editCell(page, 1, 'customer');
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Pending');
   await header.click();
   await expect(page.getByRole('alert')).toContainText('Save or discard');

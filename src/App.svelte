@@ -59,6 +59,7 @@
   } from './lib/connections';
   import ResultGrid from './components/ResultGrid.svelte';
   import ResultTiming from './components/ResultTiming.svelte';
+  import { readInspectorPreferences, saveInspectorPreferences } from './lib/row-inspector';
   import SnapshotChart from './components/SnapshotChart.svelte';
   import { numeric, type SnapshotPoint } from './lib/stats';
   import FilterBuilder from './components/FilterBuilder.svelte';
@@ -100,6 +101,12 @@
   );
   let busy = $state(false);
   let error = $state('');
+  let inspector = $state(readInspectorPreferences());
+  function updateInspector(next: Partial<typeof inspector>) {
+    inspector = { ...inspector, ...next };
+    if (!saveInspectorPreferences(inspector))
+      error = 'Row details changed for this session, but local preferences could not be saved.';
+  }
   let activeRequest = $state<string | null>(null);
   let epoch = 0;
   const engineName = $derived(
@@ -1250,6 +1257,13 @@
                     workspace.scrollTop = 0;
                   }}><WrapText size={13} />Full values</button
                 >
+                <label class="inspector-toggle" title="Show read-only details when selecting a row">
+                  <input
+                    type="checkbox"
+                    checked={inspector.enabled}
+                    onchange={(event) => updateInspector({ enabled: event.currentTarget.checked })}
+                  />Row details
+                </label>
                 {#if workspace.selectedRows.length}<button
                     class="secondary-button"
                     disabled={busy || !selected?.deletable || !connection.manualEdits}
@@ -1264,7 +1278,7 @@
                   >{connection.manualEdits &&
                   selected?.columns.some((c) => c.editable) &&
                   selected?.columns.some((c) => c.primaryKey)
-                    ? 'Click to edit · ⌘/Ctrl+S save'
+                    ? 'Select row, click again to edit · ⌘/Ctrl+S save'
                     : 'Read-only'} · ⌘/Ctrl+R refresh</span
                 >
               </div>
@@ -1287,6 +1301,9 @@
                 deletedRows={workspace.deletedRows}
                 bind:selectedRows={workspace.selectedRows}
                 fullValues={workspace.fullValues}
+                inspectorEnabled={inspector.enabled}
+                inspectorWidth={inspector.widthPercent}
+                oninspectorresize={(widthPercent) => updateInspector({ widthPercent })}
                 rowOffset={workspace.pageNumber * workspace.pageSize}
                 layoutKey={JSON.stringify([
                   connection.engine,
