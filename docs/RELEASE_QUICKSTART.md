@@ -8,7 +8,9 @@
 |---|---|
 | Mac Apple Silicon (M series) | `buggy-table_0.1.9_aarch64.dmg` |
 | Mac Intel | `buggy-table_0.1.9_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.9_x64-setup.exe` |
+| Windows x64 | ยังรอ build จาก GitHub Actions; ใช้ 0.1.8 ระหว่างนี้ |
+
+ไฟล์ Mac 0.1.9 build และตรวจในเครื่องแล้ว ส่วน Windows และ CI ยังรอคิวเพราะ [GitHub Actions ขัดข้อง](https://www.githubstatus.com/incidents/8tzbpcnl75jp) ติดตาม [installer run](https://github.com/sparkclan123/buggy-table/actions/runs/39284299677) และตรวจไฟล์ก่อนเผยแพร่ Windows เพิ่ม ห้ามเปลี่ยนชื่อไฟล์ 0.1.8 เป็น 0.1.9
 
 **รุ่น 0.1.4–0.1.9 ปิด updater ไว้** ผู้ใช้ต้องดาวน์โหลดติดตั้งทับด้วยตนเอง การเผยแพร่ release ไม่สามารถเปิด updater ในแอปที่ติดตั้งไปแล้ว ก่อนติดตั้งให้บันทึกหรือยกเลิกงานค้างและปิดแอป Windows ให้รัน installer และเลือกตำแหน่งติดตั้งเดิม
 

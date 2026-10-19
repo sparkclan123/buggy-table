@@ -1,6 +1,8 @@
 buggy-table 0.1.9 — Preview
 
-Clearer tables and a more compact workspace. Installers are provided for Mac Apple Silicon, Mac Intel and Windows x64.
+Clearer tables and a more compact workspace. Mac Apple Silicon and Mac Intel installers are available now.
+
+**Windows 0.1.9 is pending.** A [GitHub Actions service incident](https://www.githubstatus.com/incidents/8tzbpcnl75jp) is delaying the [installer workflow](https://github.com/sparkclan123/buggy-table/actions/runs/39284299677). The Mac files were built and verified locally. The full 0.1.9 CI workflows are also queued; local validation is recorded in BUILD_INFO.txt. Windows users can continue using [0.1.8](https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.8) meanwhile.
 
 ## Changes
 
@@ -21,12 +23,12 @@ Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATI
 |---|---|
 | Mac Apple Silicon (M series) | `buggy-table_0.1.9_aarch64.dmg` |
 | Mac Intel | `buggy-table_0.1.9_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.9_x64-setup.exe` |
+| Windows x64 | Pending GitHub Actions build; no 0.1.9 EXE published yet |
 
-On Mac, open the DMG and drag buggy-table into Applications, replacing the old app. On Windows, run the installer and use the existing installation location. Checksums are provided in SHA256SUMS.txt; build provenance is in BUILD_INFO.txt.
+On Mac, open the DMG and drag buggy-table into Applications, replacing the old app. Checksums are provided in SHA256SUMS.txt; build provenance is in BUILD_INFO.txt.
 
 ## Preview signing limits
 
 The Mac apps have ad-hoc bundle signatures but **no Apple Developer ID or notarization**. macOS may still show “damaged” with only “Move to Trash”; Open Anyway is not guaranteed. If your Mac offers Open Anyway and you trust the download, follow [Apple's instructions](https://support.apple.com/en-us/102445). Do not disable Gatekeeper. A Developer ID signed and notarized release is required for normal Mac distribution.
 
-The Windows installer has **no Authenticode certificate** and may show an unknown-publisher or SmartScreen warning. Future in-app updates require installation of an updater-enabled signed release once the signing credentials are configured.
+Windows previews have **no Authenticode certificate** and may show an unknown-publisher or SmartScreen warning. Future in-app updates require installation of an updater-enabled signed release once the signing credentials are configured.

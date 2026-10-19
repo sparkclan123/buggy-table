@@ -7,6 +7,8 @@
 - The default is now 100 rows; all 50/100/250/500 options, pagination, sorting and full-value virtualization passed. Preview Updates invokes the fixed downloads command while keeping drafts; browser-open failures show the address. Existing signed-update guards and recovery tests passed.
 - Frontend unit cases (8), Svelte/TypeScript checks, Rust clippy with warnings denied, and non-database Rust tests passed. UI database cases use IPC doubles. Cross-platform installer and CI provenance is recorded in BUILD_INFO.txt.
 - The native PostgreSQL transport is unchanged except for the omitted-page-size default. The running older native app and its local fixture were left untouched.
+- Both 0.1.9 Mac architectures were built locally from tag `preview/v0.1.9`; build-output and DMG-contained apps passed strict bundle signature checks, version/architecture checks and DMG integrity verification. The ARM64 release app launched and its Updates button opened the exact public downloads page in the OS browser through native IPC. Saved external connections remained disconnected; the test instance was closed afterward.
+- At initial Mac publication, GitHub Actions was affected by [an active service incident](https://www.githubstatus.com/incidents/8tzbpcnl75jp). [Installer run 39284299677](https://github.com/sparkclan123/buggy-table/actions/runs/39284299677) and the Check workflows were queued. Windows 0.1.9 was not available; no completed CI result is claimed for this version at that point.
 
 ## Row selection and read-only inspector — 0.1.8 Preview, 2026-10-19
 
