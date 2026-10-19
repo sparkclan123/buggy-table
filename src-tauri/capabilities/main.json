@@ -14,6 +14,7 @@
     "allow-run-query",
     "allow-cancel-query",
     "allow-browse-table",
+    "allow-count-table-rows",
     "allow-inspect-table",
     "allow-get-overview",
     "allow-save-table-changes",

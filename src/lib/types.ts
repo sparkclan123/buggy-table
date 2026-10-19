@@ -26,6 +26,7 @@ export interface TableInfo {
   name: string;
   columns: ColumnInfo[];
   estimatedRows: number | null;
+  deletable?: boolean;
   relationKind?: string;
   readBlockedReason?: string | null;
 }
@@ -69,6 +70,7 @@ export interface BrowseRequest {
   sortColumn: string | null;
   descending: boolean;
   page: number;
+  pageSize: number;
 }
 export interface IndexInfo {
   name: string;
@@ -82,8 +84,9 @@ export interface Overview {
   database: string;
   serverVersion: string;
   databaseSize: string;
-  connections: number;
-  activeConnections: number;
+  databaseSizeBytes?: string;
+  connections: number | null;
+  activeConnections: number | null;
   transactionsCommitted: string;
   transactionsRolledBack: string;
   cacheHitPercent: number | null;
@@ -95,7 +98,13 @@ export interface AppError {
   message: string;
 }
 
+export interface RowCount {
+  rows: string;
+  elapsedMs: number;
+}
+
 export interface RowChange {
+  delete?: boolean;
   original: Record<string, string | null>;
   changes: Record<string, string | null>;
 }
@@ -108,6 +117,7 @@ export interface SaveRequest {
 }
 export interface SaveResult {
   updatedRows: number;
+  deletedRows?: number;
 }
 
 export interface RedisResult {

@@ -17,6 +17,7 @@ const column = (name: string, dataType: string, primaryKey = false, nullable = f
 export const sampleTables: TableInfo[] = [
   {
     schema: 'public',
+    deletable: true,
     name: 'orders',
     estimatedRows: 450,
     columns: [
@@ -30,6 +31,7 @@ export const sampleTables: TableInfo[] = [
   },
   {
     schema: 'public',
+    deletable: true,
     name: 'customers',
     estimatedRows: 3,
     columns: [
@@ -73,7 +75,11 @@ export const sampleRows: Record<string, (string | null)[][]> = {
   ],
 };
 
-function matches(value: string | null, filter: Filter): boolean {
+function matches(value: string | null, filter: Filter, type: string): boolean {
+  const comparable = (text: string) =>
+    type === 'timestamptz'
+      ? Date.parse(text.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00'))
+      : Number(text);
   switch (filter.operator) {
     case 'isNull':
       return value === null;
@@ -86,9 +92,9 @@ function matches(value: string | null, filter: Filter): boolean {
     case 'contains':
       return value !== null && value.toLowerCase().includes(filter.value.toLowerCase());
     case 'greaterThan':
-      return value !== null && Number(value) > Number(filter.value);
+      return value !== null && comparable(value) > comparable(filter.value);
     case 'lessThan':
-      return value !== null && Number(value) < Number(filter.value);
+      return value !== null && comparable(value) < comparable(filter.value);
   }
 }
 
@@ -99,10 +105,13 @@ export function browseSample(
   filterMatch: FilterMatch = 'all',
   sortColumn: string | null = null,
   descending = false,
+  pageSize = 50,
 ): QueryResult {
   const rows = (sampleRows[table.name] ?? []).filter((row) => {
-    const test = (filter: Filter) =>
-      matches(row[table.columns.findIndex((c) => c.name === filter.column)], filter);
+    const test = (filter: Filter) => {
+      const index = table.columns.findIndex((c) => c.name === filter.column);
+      return matches(row[index], filter, table.columns[index]?.dataType ?? '');
+    };
     return !filters.length || (filterMatch === 'all' ? filters.every(test) : filters.some(test));
   });
   const order = [
@@ -131,9 +140,9 @@ export function browseSample(
   });
   return {
     columns: table.columns.map((c) => c.name),
-    rows: rows.slice(page * 200, (page + 1) * 200),
+    rows: rows.slice(page * pageSize, (page + 1) * pageSize),
     elapsedMs: 0,
-    truncated: rows.length > (page + 1) * 200,
+    truncated: rows.length > (page + 1) * pageSize,
     sql: '',
   };
 }

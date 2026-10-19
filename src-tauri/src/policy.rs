@@ -14,7 +14,6 @@ use crate::models::{AppError, AppResult, TableInfo};
 pub const MAX_SQL_BYTES: usize = 32_768;
 pub const MAX_ROWS: usize = 1_000;
 pub const MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
-pub const PAGE_SIZE: usize = 200;
 
 pub struct ApprovedQuery(String);
 
@@ -294,6 +293,7 @@ mod tests {
 
     fn tables() -> Vec<TableInfo> {
         vec![TableInfo {
+            deletable: false,
             relation_kind: "table".into(),
             read_blocked_reason: None,
             schema: "public".into(),

@@ -1,6 +1,6 @@
 import { createRedisWorkspace, type RedisView } from './redis-workspace';
 import type { ConnectionInfo, SavedConnection, Overview, ProfileLayout } from './types';
-import { createWorkspace, type TableWorkspace } from './workspace';
+import { createWorkspace, pendingRows, type TableWorkspace } from './workspace';
 
 export type Page = 'explorer' | 'overview' | 'privacy' | 'assistant';
 export interface ConnectionWorkspace {
@@ -16,6 +16,7 @@ export interface ConnectionWorkspace {
   schemas: string[];
   loadedSchemas: string[];
   overview: Overview | null;
+  snapshots: Overview[];
   redis: RedisView;
 }
 export function connectionWorkspace(
@@ -44,6 +45,7 @@ export function connectionWorkspace(
     schemas: [info.schema],
     loadedSchemas: online ? [info.schema] : [],
     overview: null,
+    snapshots: [],
     redis: createRedisWorkspace(),
   };
 }
@@ -55,7 +57,7 @@ export function savedWorkspace(saved: SavedConnection): ConnectionWorkspace {
   );
 }
 export function hasEdits(entry: ConnectionWorkspace) {
-  return entry.tabs.some((t) => Object.keys(t.edits).length > 0 || t.uncertain);
+  return entry.tabs.some((t) => pendingRows(t) > 0 || t.uncertain);
 }
 export function layoutOf(entry: ConnectionWorkspace): ProfileLayout {
   return {

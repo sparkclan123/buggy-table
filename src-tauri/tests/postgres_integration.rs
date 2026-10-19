@@ -48,6 +48,7 @@ fn browse(connection_id: &str) -> BrowseRequest {
         sort_column: None,
         descending: false,
         page: 0,
+        page_size: 50,
     }
 }
 
@@ -94,7 +95,7 @@ async fn reader_can_browse_query_inspect_and_observe() {
     );
     let page = app.browse(browse(&info.id)).await.unwrap();
     assert_total_timings(&page);
-    assert_eq!(page.rows.len(), 200);
+    assert_eq!(page.rows.len(), 50);
     assert!(page.truncated);
     assert_eq!(page.rows[0][0].as_deref(), Some("1"));
     assert_eq!(page.rows[1][0].as_deref(), Some("2")); // Numeric, not text ordering.
@@ -729,6 +730,7 @@ async fn editable_rows(app: &Workbench, id: &str, table: &str) -> QueryResult {
 }
 fn edit(result: &QueryResult, index: usize, column: &str, value: Option<&str>) -> RowChange {
     RowChange {
+        delete: false,
         original: result
             .columns
             .iter()
@@ -750,6 +752,141 @@ fn save(id: &str, table: &str, rows: Vec<RowChange>) -> SaveRequest {
 async fn reset_edits() {
     let (db, task) = admin().await;
     db.batch_execute("UPDATE public.edit_items SET label = CASE id WHEN 1 THEN 'First' ELSE 'Second' END, note = CASE id WHEN 1 THEN NULL ELSE 'original' END; UPDATE public.edit_composite SET label = CASE tenant WHEN 1 THEN 'one' ELSE 'two' END").await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn page_sizes_and_explicit_filtered_counts_are_bounded() {
+    let app = Workbench::default();
+    let info = app.connect(request()).await.unwrap();
+    for size in [50, 100, 250, 500] {
+        let mut req = browse(&info.id);
+        req.page_size = size;
+        let first = app.browse(req).await.unwrap();
+        assert_eq!(first.rows.len(), size.min(450));
+        assert_eq!(first.rows[0][0].as_deref(), Some("1"));
+        let mut req = browse(&info.id);
+        req.page_size = size;
+        req.page = 1;
+        let second = app.browse(req).await.unwrap();
+        if size < 450 {
+            assert_eq!(second.rows[0][0], Some((size + 1).to_string()));
+        } else {
+            assert!(second.rows.is_empty());
+        }
+    }
+    assert_eq!(app.count(browse(&info.id)).await.unwrap().rows, "450");
+    let mut req = browse(&info.id);
+    req.filters.push(Filter {
+        column: "id".into(),
+        operator: FilterOperator::LessThan,
+        value: "8".into(),
+    });
+    assert_eq!(app.count(req).await.unwrap().rows, "7");
+    for (page_size, page) in [(0, 0), (51, 0), (500, 201)] {
+        let mut req = browse(&info.id);
+        req.page_size = page_size;
+        req.page = page;
+        assert_eq!(app.browse(req).await.unwrap_err().code, "POLICY_DENIED");
+    }
+    app.disconnect(&info.id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn staged_deletes_and_updates_commit_atomically_and_recheck_permissions() {
+    let (db, task) = admin().await;
+    let schema = format!("deletes_{}", Uuid::new_v4().simple());
+    db.batch_execute(&format!("CREATE SCHEMA {schema}; GRANT USAGE ON SCHEMA {schema} TO tablepor_editor, tablepor_reader;
+        CREATE TABLE {schema}.items(id integer PRIMARY KEY, label text, payload jsonb);
+        INSERT INTO {schema}.items VALUES (1,'one','{{\"a\":1}}'),(2,'two',NULL),(3,'three','[]');
+        GRANT SELECT, UPDATE, DELETE ON {schema}.items TO tablepor_editor;
+        GRANT SELECT ON {schema}.items TO tablepor_reader;")).await.unwrap();
+    let app = Workbench::default();
+    let mut profile = editor_request();
+    profile.schema = schema.clone();
+    let info = app.connect(profile).await.unwrap();
+    assert!(info.tables[0].deletable);
+    let original = editable_rows(&app, &info.id, "items").await;
+    let deletion = |index: usize| RowChange {
+        delete: true,
+        original: original
+            .columns
+            .iter()
+            .cloned()
+            .zip(original.rows[index].clone())
+            .collect(),
+        changes: Default::default(),
+    };
+    // A later stale row must roll back an earlier delete in the same batch.
+    db.batch_execute(&format!(
+        "UPDATE {schema}.items SET label='concurrent' WHERE id=2"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        app.save(save(
+            &info.id,
+            "items",
+            vec![deletion(0), edit(&original, 1, "label", Some("draft"))]
+        ))
+        .await
+        .unwrap_err()
+        .code,
+        "EDIT_CONFLICT"
+    );
+    assert_eq!(editable_rows(&app, &info.id, "items").await.rows.len(), 3);
+    let current = editable_rows(&app, &info.id, "items").await;
+    let saved = app
+        .save(save(
+            &info.id,
+            "items",
+            vec![deletion(0), edit(&current, 1, "label", Some("saved"))],
+        ))
+        .await
+        .unwrap();
+    assert_eq!((saved.updated_rows, saved.deleted_rows), (1, 1));
+    let current = editable_rows(&app, &info.id, "items").await;
+    assert_eq!(current.rows.len(), 2);
+    assert_eq!(current.rows[0][1].as_deref(), Some("saved"));
+    db.batch_execute(&format!(
+        "REVOKE DELETE ON {schema}.items FROM tablepor_editor"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        app.save(save(&info.id, "items", vec![deletion(2)]))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    let mut invalid = deletion(2);
+    invalid.changes.insert("label".into(), Some("no".into()));
+    assert_eq!(
+        app.save(save(&info.id, "items", vec![invalid]))
+            .await
+            .unwrap_err()
+            .code,
+        "EDIT_LIMIT"
+    );
+    let mut reader = request();
+    reader.schema = schema.clone();
+    let read = app.connect(reader).await.unwrap();
+    assert!(!read.tables[0].deletable);
+    assert_eq!(
+        app.save(save(&read.id, "items", vec![deletion(2)]))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    app.disconnect(&read.id).await.unwrap();
+    app.disconnect(&info.id).await.unwrap();
+    db.batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
     task.abort();
 }
 
@@ -1041,14 +1178,15 @@ async fn multiple_filters_and_sorting_run_before_pagination() {
         filter("status", FilterOperator::Equals, "completed"),
     ];
     r.filter_match = FilterMatch::Any;
+    r.page_size = 250;
     assert_eq!(app.browse(r).await.unwrap().rows.len(), 156);
     let mut r = browse(&info.id);
     r.sort_column = Some("total".into());
     r.descending = true;
     r.page = 1;
     let second = app.browse(r).await.unwrap();
-    assert_eq!(second.rows[0][0].as_deref(), Some("250"));
-    assert_eq!(second.rows[199][0].as_deref(), Some("51"));
+    assert_eq!(second.rows[0][0].as_deref(), Some("400"));
+    assert_eq!(second.rows[49][0].as_deref(), Some("351"));
     // Sort ties use the immutable key, keeping page boundaries deterministic.
     let mut r = browse(&info.id);
     r.sort_column = Some("country".into());
@@ -1196,6 +1334,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
         schema: Some("audit".into()),
         table: "edit_items".into(),
         rows: vec![RowChange {
+            delete: false,
             original: [
                 ("id".into(), Some("1".into())),
                 ("label".into(), Some("Audit only".into())),
@@ -1237,6 +1376,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
         schema: Some("audit".into()),
         table: "edit_items".into(),
         rows: vec![RowChange {
+            delete: false,
             original: [
                 ("id".into(), Some("1".into())),
                 ("label".into(), Some("Audit edited".into())),

@@ -14,6 +14,7 @@ fn main() {
             "run_query",
             "cancel_query",
             "browse_table",
+            "count_table_rows",
             "inspect_table",
             "get_overview",
             "save_table_changes",

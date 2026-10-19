@@ -200,6 +200,34 @@ impl Workbench {
         self.run(Operation::Browse(request)).await
     }
 
+    pub async fn count(&self, request: BrowseRequest) -> AppResult<RowCount> {
+        let started = Instant::now();
+        let (profile, _guard, cancelled) = self
+            .start_operation(&request.connection_id, &request.request_id)
+            .await?;
+        let mut result = bounded_metadata(
+            async {
+                if let Session::Mysql(p) = profile.as_ref() {
+                    return mysql::count(p, &request).await;
+                }
+                let profile = profile.postgres()?;
+                let db = profile.open().await?;
+                db.preflight().await?;
+                let table = db
+                    .approved_table(
+                        request.schema.as_deref().unwrap_or(&profile.schema),
+                        &request.table,
+                    )
+                    .await?;
+                db.count(&table, &request).await
+            },
+            cancelled,
+        )
+        .await?;
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        Ok(result)
+    }
+
     pub async fn save(&self, request: SaveRequest) -> AppResult<SaveResult> {
         let (profile, _guard, mut cancelled) = self
             .start_operation(&request.connection_id, &request.request_id)
@@ -268,13 +296,11 @@ impl Workbench {
                 Operation::Browse(r) => {
                     let validating = Instant::now();
                     db.preflight().await?;
-                    let tables = db
-                        .approved_tables(r.schema.as_deref().unwrap_or(&profile.schema))
+                    let table = db
+                        .approved_table(r.schema.as_deref().unwrap_or(&profile.schema), &r.table)
                         .await?;
-                    let table = tables.iter().find(|t| t.name == r.table)
-                        .ok_or_else(|| AppError::policy("This table is no longer in the approved scope. Reconnect to refresh the schema."))?;
                     let validation_ms = validating.elapsed().as_millis() as u64;
-                    let mut result = db.browse(table, r).await?;
+                    let mut result = db.browse(&table, r).await?;
                     result.timings = Some(QueryTimings {
                         connection_ms: 0,
                         validation_ms,

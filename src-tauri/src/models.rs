@@ -88,6 +88,8 @@ pub struct TableInfo {
     pub columns: Vec<ColumnInfo>,
     pub estimated_rows: Option<i64>,
     #[serde(default)]
+    pub deletable: bool,
+    #[serde(default)]
     pub relation_kind: String,
     #[serde(default)]
     pub read_blocked_reason: Option<String>,
@@ -191,6 +193,32 @@ pub struct BrowseRequest {
     pub sort_column: Option<String>,
     pub descending: bool,
     pub page: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: usize,
+}
+
+fn default_page_size() -> usize {
+    50
+}
+
+impl BrowseRequest {
+    pub fn checked_page_size(&self) -> AppResult<usize> {
+        if !matches!(self.page_size, 50 | 100 | 250 | 500)
+            || u64::from(self.page) * self.page_size as u64 > 100_000
+        {
+            return Err(AppError::policy(
+                "Choose 50, 100, 250 or 500 rows per page; offset is limited to 100,000 rows.",
+            ));
+        }
+        Ok(self.page_size)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowCount {
+    pub rows: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,8 +238,9 @@ pub struct Overview {
     pub database: String,
     pub server_version: String,
     pub database_size: String,
-    pub connections: i64,
-    pub active_connections: i64,
+    pub database_size_bytes: String,
+    pub connections: Option<i64>,
+    pub active_connections: Option<i64>,
     pub transactions_committed: String,
     pub transactions_rolled_back: String,
     pub cache_hit_percent: Option<f64>,
@@ -234,6 +263,8 @@ pub struct SaveRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RowChange {
+    #[serde(default)]
+    pub delete: bool,
     pub original: std::collections::BTreeMap<String, Option<String>>,
     pub changes: std::collections::BTreeMap<String, Option<String>>,
 }
@@ -242,6 +273,7 @@ pub struct RowChange {
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
     pub updated_rows: usize,
+    pub deleted_rows: usize,
 }
 
 #[derive(Debug, Deserialize)]

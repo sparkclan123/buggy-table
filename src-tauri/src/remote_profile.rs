@@ -12,17 +12,22 @@ pub struct RemoteProfile {
     pub username: String,
     pub password: Zeroizing<String>,
     pub tls: TlsMode,
+    pub root_ca_pem: String,
 }
 
 impl RemoteProfile {
     pub fn new(r: ConnectRequest) -> AppResult<Self> {
         let password = Zeroizing::new(r.password);
-        if r.tls == TlsMode::Require || !r.root_ca_pem.is_empty() {
+        if r.tls == TlsMode::Require
+            || (!r.root_ca_pem.is_empty()
+                && (r.engine != Engine::Mysql || r.tls != TlsMode::VerifyFull))
+        {
             return Err(AppError::new(
                 "INVALID_CONNECTION",
-                "Custom TLS settings are currently supported for PostgreSQL only.",
+                "Custom CA certificates require verified TLS on PostgreSQL or MySQL. Redis requires the system trust store.",
             ));
         }
+        crate::postgres::parse_root_ca(&r.root_ca_pem)?;
         if r.manual_edits {
             return Err(AppError::policy(
                 "MySQL and Redis connections are read-only in this release.",
@@ -72,6 +77,7 @@ impl RemoteProfile {
             username: r.username,
             password,
             tls: r.tls,
+            root_ca_pem: r.root_ca_pem,
         })
     }
 

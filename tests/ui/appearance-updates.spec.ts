@@ -57,7 +57,7 @@ test('system theme follows OS; explicit choice survives reload and covers editor
   await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
   await expect(page.getByRole('textbox', { name: /^Cell value row/ })).toHaveCSS(
     'background-color',
-    'rgb(28, 30, 33)',
+    'rgb(74, 60, 32)',
   );
   await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: 'SQL editor', exact: true }).click();

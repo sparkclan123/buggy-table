@@ -16,8 +16,8 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - คลิกหัวคอลัมน์เพื่อ sort ASC/DESC จากฐานข้อมูลก่อนแบ่งหน้า; เก็บความกว้างและการเรียงแยกตามแท็บ
 - เพิ่ม/ลบ filter ได้สูงสุด 20 เงื่อนไข เลือก AND/OR แล้ว Apply filters
 - Cmd+R บน Mac, Ctrl+R บน Windows หรือ F5 รีเฟรชข้อมูลตาราง โดยไม่รีโหลดทั้งแอป; ถ้ามีค่ารอ Save จะเตือนก่อน
-- Save เป็น transaction เดียว ตรวจ Primary key, UPDATE permission และค่าต้นฉบับก่อนบันทึก
-- SQL editor ยังอ่านอย่างเดียว; Manual Save แยกจาก query/AI ไม่มี Delete/Truncate endpoint
+- Save เป็น transaction เดียว ตรวจ Primary key, UPDATE/DELETE permission และค่าต้นฉบับก่อนบันทึก
+- SQL editor ยังอ่านอย่างเดียว; Manual Save แยกจาก query/AI รองรับลบแถวที่เลือก ไม่มี Truncate endpoint
 - UI กระชับ โทนเรียบ ข้อมูลไม่มี status สี, filter ใช้ bound parameters, pagination และ virtualized grid ตามขนาดหน้าจอ
 - SQL editor พร้อม syntax highlighting, completion และ `Cmd/Ctrl + Enter`
 - SELECT subset, estimated `EXPLAIN`, table structure, index definitions/scan counters
@@ -29,12 +29,22 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - Signed release มีปุ่ม Updates มุมล่างขวา ตรวจ GitHub เมื่อเปิดแอปและทุก 6 ชั่วโมง ปิด automatic checks ได้ ไม่มีข้อมูล DB/credential ใน request
 - วิธีสร้างตัวติดตั้งและออกรุ่นใหม่: [Distribution guide](docs/DISTRIBUTION.md)
 
-เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
+เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE/DELETE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
 
 - จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
 - สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
 - PostgreSQL แสดงรายชื่อ tables/views ใน schema พร้อมเหตุผลสำหรับรายการที่อ่านไม่ได้; รองรับ JSON/JSONB, enum และ array ของชนิดที่รองรับ รวมถึงอ่าน materialized views และมีปุ่ม Refresh schema
 - อ่าน catalog เป็นชุดแทนการส่งคำสั่งแยกทุกตาราง เพื่อลดเวลารอเซิร์ฟเวอร์ภายนอก; เวลา PostgreSQL แสดงผลรวมพร้อมรายละเอียด connection/checks/query เมื่อชี้ที่ตัวเลข
+
+- ช่องรอ Save มีพื้นหลังไฮไลต์; คลิกเลขแถว # แล้ว Delete/Backspace เพื่อเตรียมลบเป็นสีแดง และ Restore/Discard เพื่อคืนแถว; ต้องมี Primary key และสิทธิ์ DELETE
+- ลากหัวคอลัมน์สลับตำแหน่ง หรือ Alt+ลูกศรซ้าย/ขวา; บันทึกตำแหน่งเฉพาะเครื่องนี้ ไม่เปลี่ยน schema
+- Timestamp พิมพ์เองหรือใช้ปฏิทิน/เวลาได้ทั้งการแก้ไขและ filter โดยรักษา offset และเศษวินาที; filter ใช้สัญลักษณ์พร้อมคำอธิบายเมื่อชี้เมาส์
+- แบ่งหน้า 50 รายการเริ่มต้น เลือก 100/250/500 ได้; แสดงจำนวนประมาณก่อน และ Count exact สำหรับนับตาม filter โดยมี query timeout 5 วินาที
+- Full values เปิดการตัดบรรทัดเพื่อดูค่าเต็มในหน้าปัจจุบัน (ปิดเป็นค่าเริ่มต้น); คอลัมน์ # ตรึงเมื่อเลื่อนแนวนอน
+- ปุ่มข้าง Refresh หุบ/กางแถบเครื่องมือ; Cmd/Ctrl+W ปิดแท็บปัจจุบันพร้อมตรวจงานค้าง; scrollbar แท็บเล็กลง
+- Overview PostgreSQL/MySQL และ Redis INFO แสดงกราฟจาก snapshot จริง เก็บประวัติ 30 ครั้งในหน่วยความจำจากการ refresh ด้วยตนเอง
+- Redis SCAN แสดงแต่ละคีย์เป็นแถว รวมผล Next scan โดยตัดคีย์ซ้ำ; ค้นหาด้วย Enter และคำสั่ง SCAN ให้ผลรูปแบบเดียวกัน
+- MySQL รองรับ CA PEM ส่วนตัว และแยกข้อความผิดพลาดการเชื่อมต่อเป็น network/TLS/auth/permission/server compatibility
 
 **ยังไม่เปิดใช้:** MySQL/Redis manual writes, Redis Cluster/Sentinel/streams, MariaDB, local AI, SSH, query history, joins/CTEs/functions/casts และการรับรองใช้งาน production; PostgreSQL views/RLS/foreign tables/partitioned parents/virtual generated columns และชนิด domain/composite/extension แสดงโครงสร้างพร้อมเหตุผล แต่ยังอ่านข้อมูลไม่ได้ ส่วน materialized views อ่านได้
 
@@ -138,7 +148,7 @@ src-tauri/src/
   redis_store.rs             Redis read-command allowlist และ typed responses
   remote_profile.rs          Session settings และ TLS/input validation
   bounded_stream.rs          Redis wire-byte limit ก่อน decode
-  mutations.rs               Typed manual UPDATE, conflict checks และ atomic save
+  mutations.rs               Typed manual UPDATE/DELETE, conflict checks และ atomic save
   models.rs                  DTOs และ safe errors
 tests/                       Disposable database fixture และ browser UI tests
 ```

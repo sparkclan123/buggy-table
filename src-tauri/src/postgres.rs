@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     models::*,
-    policy::{self, MAX_RESULT_BYTES, MAX_ROWS, PAGE_SIZE, quote_identifier},
+    policy::{self, MAX_RESULT_BYTES, MAX_ROWS, quote_identifier},
 };
 
 pub struct Profile {
@@ -180,7 +180,7 @@ impl Drop for Database {
     }
 }
 
-fn parse_root_ca(pem: &str) -> AppResult<Vec<Certificate>> {
+pub(crate) fn parse_root_ca(pem: &str) -> AppResult<Vec<Certificate>> {
     let invalid = || {
         AppError::new(
             "INVALID_CA",
@@ -420,6 +420,16 @@ impl Database {
     }
 
     pub async fn tables(&self, schema: &str) -> AppResult<Vec<TableInfo>> {
+        self.catalog(schema, None).await
+    }
+
+    pub async fn approved_table(&self, schema: &str, name: &str) -> AppResult<TableInfo> {
+        self.catalog(schema, Some(name)).await?.into_iter()
+            .find(|table| table.read_blocked_reason.is_none())
+            .ok_or_else(|| AppError::policy("This table is outside the approved scope. Refresh the schema to inspect its permissions and type restrictions."))
+    }
+
+    async fn catalog(&self, schema: &str, table_name: Option<&str>) -> AppResult<Vec<TableInfo>> {
         if schema.is_empty() || schema.len() > 253 || schema.contains('\0') {
             return Err(AppError::policy("Invalid schema name."));
         }
@@ -438,12 +448,14 @@ impl Database {
             .query_typed(
                 "SELECT c.oid, c.relname, c.reltuples::bigint, c.relkind::text, c.relrowsecurity,
                has_table_privilege(c.oid, 'SELECT'),
-               EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid)
+               EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid),
+               has_table_privilege(c.oid, 'DELETE')
              FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
+               AND ($2::text IS NULL OR c.relname = $2)
              ORDER BY c.relname LIMIT 5001",
-                &[(&schema, Type::TEXT)],
+                &[(&schema, Type::TEXT), (&table_name, Type::TEXT)],
             )
             .await
             .map_err(query_error)?;
@@ -541,7 +553,13 @@ impl Database {
                     column.editable = false;
                 }
             }
+            let deletable = self.manual_edits
+                && kind == "r"
+                && reason.is_none()
+                && row.get::<_, bool>(7)
+                && columns.iter().any(|c| c.primary_key);
             tables.push(TableInfo {
+                deletable,
                 schema: schema.into(),
                 name: row.get(1),
                 columns,
@@ -649,16 +667,12 @@ impl Database {
         }
     }
 
-    pub async fn browse(
-        &self,
+    fn browse_statement(
         table: &TableInfo,
         request: &BrowseRequest,
-    ) -> AppResult<QueryResult> {
-        if request.page > 500 {
-            return Err(AppError::policy(
-                "Pagination is limited to 100,000 rows in this preview.",
-            ));
-        }
+        count: bool,
+    ) -> AppResult<(String, Vec<String>)> {
+        let page_size = request.checked_page_size()?;
         let find_column = |name: &str| {
             table
                 .columns
@@ -675,6 +689,11 @@ impl Database {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let projections = if count {
+            "COUNT(*)::pg_catalog.text".to_string()
+        } else {
+            projections
+        };
         let mut sql = format!(
             "SELECT {projections} FROM {}.{}",
             quote_identifier(&table.schema),
@@ -742,6 +761,9 @@ impl Database {
             };
             sql.push_str(&format!(" WHERE ({})", conditions.join(conjunction)));
         }
+        if count {
+            return Ok((sql, parameters));
+        }
         let mut order = if let Some(name) = &request.sort_column {
             vec![find_column(name)?.name.clone()]
         } else {
@@ -784,9 +806,42 @@ impl Database {
         }
         sql.push_str(&format!(
             " LIMIT {} OFFSET {}",
-            PAGE_SIZE + 1,
-            request.page as usize * PAGE_SIZE
+            page_size + 1,
+            request.page as usize * page_size
         ));
+        Ok((sql, parameters))
+    }
+
+    pub async fn count(&self, table: &TableInfo, request: &BrowseRequest) -> AppResult<RowCount> {
+        let (sql, parameters) = Self::browse_statement(table, request, true)?;
+        // An exact count can scan the table: opt-in, time-bounded, never part of page loading.
+        self.client
+            .batch_execute("SET LOCAL statement_timeout = '5s'")
+            .await
+            .map_err(query_error)?;
+        let params: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), Type)> = parameters
+            .iter()
+            .map(|p| (p as &(dyn tokio_postgres::types::ToSql + Sync), Type::TEXT))
+            .collect();
+        let started = Instant::now();
+        let row = self
+            .client
+            .query_typed_one(&sql, &params)
+            .await
+            .map_err(query_error)?;
+        Ok(RowCount {
+            rows: row.get(0),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    pub async fn browse(
+        &self,
+        table: &TableInfo,
+        request: &BrowseRequest,
+    ) -> AppResult<QueryResult> {
+        let page_size = request.checked_page_size()?;
+        let (sql, parameters) = Self::browse_statement(table, request, false)?;
         let params: Vec<(&(dyn tokio_postgres::types::ToSql + Sync), Type)> = parameters
             .iter()
             .map(|p| (p as &(dyn tokio_postgres::types::ToSql + Sync), Type::TEXT))
@@ -808,8 +863,8 @@ impl Database {
         };
         let mut bytes = 0;
         while let Some(row) = stream.try_next().await.map_err(query_error)? {
-            if result.rows.len() == PAGE_SIZE {
-                // LIMIT PAGE_SIZE + 1 already bounds this read. The extra row
+            if result.rows.len() == page_size {
+                // LIMIT page_size + 1 already bounds this read. The extra row
                 // only signals another page; don't open a separate cancellation
                 // connection (and TLS handshake) for an already bounded query.
                 result.truncated = true;
@@ -852,12 +907,13 @@ impl Database {
              numbackends::bigint, (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active'),
              xact_commit::text, xact_rollback::text,
              CASE WHEN blks_hit + blks_read > 0 THEN 100.0 * blks_hit::float8 / (blks_hit::float8 + blks_read::float8) ELSE NULL END,
-             stats_reset::text, clock_timestamp()::text FROM pg_stat_database WHERE datname = current_database()", &[])
+             stats_reset::text, clock_timestamp()::text, pg_database_size(current_database())::text FROM pg_stat_database WHERE datname = current_database()", &[])
             .await.map_err(query_error)?;
         Ok(Overview {
             database: row.get(0),
             server_version: row.get(1),
             database_size: row.get(2),
+            database_size_bytes: row.get(10),
             connections: row.get(3),
             active_connections: row.get(4),
             transactions_committed: row.get(5),

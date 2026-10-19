@@ -1,6 +1,9 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { KeyRound, ArrowUp, ArrowDown } from '@lucide/svelte';
+  import DateTimeInput from './DateTimeInput.svelte';
+  import { temporalKind } from '../lib/temporal';
+  import { readColumnOrder, saveColumnOrder } from '../lib/column-layout';
   import type { CellEdits } from '../lib/workspace';
   import type { QueryResult, TableInfo } from '../lib/types';
 
@@ -10,26 +13,39 @@
     busy = false,
     editable = false,
     edits = {},
+    deletedRows = [],
+    selectedRows = $bindable([]),
+    fullValues = false,
+    layoutKey = '',
+    rowOffset = 0,
     top = $bindable(0),
     widths = $bindable({}),
     sortColumn = null,
     descending = false,
     onsort,
     onchange = () => {},
+    ondelete = () => {},
+    onlayoutwarning = () => {},
   }: {
     result: QueryResult | null;
     table: TableInfo | undefined;
     busy?: boolean;
     editable?: boolean;
     edits?: CellEdits;
+    deletedRows?: number[];
+    selectedRows?: number[];
+    fullValues?: boolean;
+    layoutKey?: string;
+    rowOffset?: number;
     top?: number;
     widths?: Record<string, number>;
     sortColumn?: string | null;
     descending?: boolean;
     onsort?: (column: string) => void;
     onchange?: (row: number, column: string, value: string | null) => void;
+    ondelete?: (rows: number[]) => void;
+    onlayoutwarning?: () => void;
   } = $props();
-
   type Editing = {
     row: number;
     column: string;
@@ -39,38 +55,72 @@
   };
   let editing = $state<Editing | null>(null);
   let resizing: { column: string; start: number; width: number } | null = null;
-  const rowHeight = 28;
-  let viewportRows = $state(32);
+  let order = $state<string[]>([]);
+  let dragging = $state<string | null>(null);
+  let draggedAt = 0;
+  let selectionAnchor = 0;
+  let heights = $state<Record<number, number>>({});
+  let viewportHeight = $state(700);
   let scroller: HTMLDivElement;
-  const start = $derived(
-    Math.max(
-      0,
-      Math.min(
-        Math.floor(top / rowHeight) - 4,
-        Math.max(0, (result?.rows.length ?? 0) - viewportRows),
-      ),
-    ),
-  );
-  const end = $derived(Math.min(result?.rows.length ?? 0, start + viewportRows));
-  const totalWidth = $derived(
-    36 + (result?.columns.reduce((sum, column) => sum + width(column), 0) ?? 0),
-  );
-  const metadata = $derived(Object.fromEntries((table?.columns ?? []).map((c) => [c.name, c])));
-
   let loadedResult: QueryResult | null = null;
+  let loadedLayout = '';
+  const metadata = $derived(Object.fromEntries((table?.columns ?? []).map((c) => [c.name, c])));
+  const indices = $derived(Object.fromEntries((result?.columns ?? []).map((name, i) => [name, i])));
+  const columns = $derived([
+    ...new Set([...order.filter((c) => c in indices), ...(result?.columns ?? [])]),
+  ]);
+  const totalWidth = $derived(42 + columns.reduce((sum, column) => sum + width(column), 0));
+  const offsets = $derived.by(() => {
+    const values = [0];
+    for (let i = 0; i < (result?.rows.length ?? 0); i++)
+      values.push(values[i] + (fullValues ? (heights[i] ?? 56) : 28));
+    return values;
+  });
+  function rowAt(position: number) {
+    let lo = 0,
+      hi = Math.max(0, offsets.length - 1);
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (offsets[mid] <= position) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+  const start = $derived(Math.max(0, rowAt(top) - 4));
+  const end = $derived(Math.min(result?.rows.length ?? 0, rowAt(top + viewportHeight) + 5));
   $effect(() => {
-    // New results invalidate an open editor, including synchronous sample saves.
     if (busy || result !== loadedResult) {
       editing = null;
       loadedResult = result;
     }
   });
   $effect(() => {
-    if (scroller) scroller.scrollTop = top;
+    // Re-measure wrapped rows when results, wrapping or column widths change.
+    void result;
+    void fullValues;
+    JSON.stringify(widths);
+    heights = {};
+  });
+  $effect(() => {
+    if (layoutKey !== loadedLayout) {
+      loadedLayout = layoutKey;
+      order = layoutKey ? readColumnOrder(layoutKey) : [];
+    }
+  });
+  $effect(() => {
+    if (scroller && scroller.scrollTop !== top) scroller.scrollTop = top;
   });
   function observeViewport(node: HTMLDivElement) {
     const observer = new ResizeObserver(() => {
-      viewportRows = Math.ceil(node.clientHeight / rowHeight) + 8;
+      viewportHeight = node.clientHeight;
+    });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+  function measureRow(node: HTMLTableRowElement, row: number) {
+    const observer = new ResizeObserver(() => {
+      const height = Math.max(28, Math.ceil(node.getBoundingClientRect().height));
+      if (fullValues && heights[row] !== height) heights[row] = height;
     });
     observer.observe(node);
     return { destroy: () => observer.disconnect() };
@@ -98,6 +148,15 @@
       current.cell.querySelector<HTMLButtonElement>('.editable-cell')?.focus();
     }
   }
+  function input(value: string) {
+    if (editing) {
+      editing.draft = value;
+      onchange(editing.row, editing.column, value);
+    }
+  }
+  function blur(event: FocusEvent) {
+    if (!editing?.cell.contains(event.relatedTarget as Node | null)) void finish();
+  }
   function startResize(event: PointerEvent, column: string) {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -105,16 +164,44 @@
     resizing = { column, start: event.clientX, width: width(column) };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
+  function moveColumn(from: string, to: string) {
+    if (busy || from === to) return;
+    const next = [...columns];
+    const before = next.indexOf(from),
+      after = next.indexOf(to);
+    if (before < 0 || after < 0) return;
+    next.splice(before, 1);
+    next.splice(after, 0, from);
+    order = next;
+    if (layoutKey && !saveColumnOrder(layoutKey, next)) onlayoutwarning();
+  }
+  function selectRow(event: MouseEvent, row: number) {
+    if (busy) return;
+    // Safari does not focus buttons on click; keep Delete/Backspace on this row.
+    (event.currentTarget as HTMLButtonElement).focus();
+    if (event.shiftKey)
+      selectedRows = Array.from(
+        { length: Math.abs(row - selectionAnchor) + 1 },
+        (_, i) => Math.min(row, selectionAnchor) + i,
+      );
+    else if (event.metaKey || event.ctrlKey)
+      selectedRows = selectedRows.includes(row)
+        ? selectedRows.filter((v) => v !== row)
+        : [...selectedRows, row];
+    else selectedRows = [row];
+    if (!event.shiftKey) selectionAnchor = row;
+  }
 </script>
 
 <div
   class="grid-scroll"
+  class:full-values={fullValues}
   bind:this={scroller}
   use:observeViewport
   onscroll={() => (top = scroller.scrollTop)}
   aria-busy={busy}
 >
-  {#if result && result.columns.length}
+  {#if result && columns.length}
     <table
       class="data-table"
       aria-label="Query results"
@@ -122,27 +209,64 @@
       style:width={`${totalWidth}px`}
     >
       <colgroup
-        ><col style:width="36px" />{#each result.columns as column}<col
+        ><col style:width="42px" />{#each columns as column}<col
             style:width={`${width(column)}px`}
           />{/each}</colgroup
       >
       <thead
         ><tr
           ><th class="row-number" scope="col">#</th>
-          {#each result.columns as column}
+          {#each columns as column (column)}
             <th
               scope="col"
+              class:dragging={dragging === column}
               aria-sort={sortColumn === column ? (descending ? 'descending' : 'ascending') : 'none'}
             >
               <button
                 class="column-heading"
                 aria-label={`Sort by ${column}`}
-                disabled={!onsort || busy}
-                onclick={() => onsort?.(column)}
-                title={`${column} · ${metadata[column]?.dataType ?? 'text'}`}
+                disabled={busy}
+                draggable={!!layoutKey && !busy}
+                ondragstart={(event) => {
+                  dragging = column;
+                  event.dataTransfer?.setData('text/plain', column);
+                  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+                }}
+                ondragover={(event) => {
+                  if (dragging) {
+                    event.preventDefault();
+                    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+                  }
+                }}
+                ondrop={(event) => {
+                  event.preventDefault();
+                  if (dragging) moveColumn(dragging, column);
+                  dragging = null;
+                  draggedAt = Date.now();
+                }}
+                ondragend={() => {
+                  dragging = null;
+                  draggedAt = Date.now();
+                }}
+                onkeydown={(event) => {
+                  if (
+                    layoutKey &&
+                    event.altKey &&
+                    ['ArrowLeft', 'ArrowRight'].includes(event.key)
+                  ) {
+                    event.preventDefault();
+                    const target =
+                      columns[columns.indexOf(column) + (event.key === 'ArrowLeft' ? -1 : 1)];
+                    if (target) moveColumn(column, target);
+                  }
+                }}
+                onclick={() => {
+                  if (Date.now() - draggedAt > 200) onsort?.(column);
+                }}
+                title={`${column} · ${metadata[column]?.dataType ?? 'text'}${layoutKey ? ' · Drag or Alt+←/→ to reorder on this device' : ''}`}
               >
-                {#if metadata[column]?.primaryKey}<KeyRound size={11} />{/if}
-                <span>{column}</span><small>{metadata[column]?.dataType ?? 'text'}</small>
+                {#if metadata[column]?.primaryKey}<KeyRound size={11} />{/if}<span>{column}</span
+                ><small>{metadata[column]?.dataType ?? 'text'}</small>
                 {#if sortColumn === column}{#if descending}<ArrowDown size={12} />{:else}<ArrowUp
                       size={12}
                     />{/if}{/if}
@@ -184,69 +308,103 @@
       >
       <tbody>
         {#if start > 0}<tr aria-hidden="true" class="spacer"
-            ><td colspan={result.columns.length + 1} style:height={`${start * rowHeight}px`}
-            ></td></tr
+            ><td colspan={columns.length + 1} style:height={`${offsets[start]}px`}></td></tr
           >{/if}
         {#each result.rows.slice(start, end) as row, i (start + i)}
-          <tr aria-rowindex={start + i + 2}
-            ><td class="row-number">{start + i + 1}</td>
-            {#each row as original, j}
-              {@const column = result.columns[j]}
-              {@const cell = display(start + i, column, original)}
+          {@const index = start + i}
+          <tr
+            aria-rowindex={index + 2}
+            aria-selected={selectedRows.includes(index)}
+            class:row-selected={selectedRows.includes(index)}
+            class:pending-delete={deletedRows.includes(index)}
+            use:measureRow={index}
+          >
+            <td class="row-number"
+              ><button
+                class="row-select"
+                aria-label={`Select row ${index + 1}`}
+                aria-pressed={selectedRows.includes(index)}
+                disabled={busy}
+                title={deletedRows.includes(index)
+                  ? 'Pending deletion · save or discard'
+                  : 'Select row · Delete/Backspace stages deletion'}
+                onclick={(event) => selectRow(event, index)}
+                onkeydown={(event) => {
+                  if (!busy && ['Backspace', 'Delete'].includes(event.key)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    ondelete(selectedRows.includes(index) ? selectedRows : [index]);
+                  }
+                }}
+              >
+                {rowOffset + index + 1}
+              </button></td
+            >
+            {#each columns as column (column)}
+              {@const original = row[indices[column]]}
+              {@const cell = display(index, column, original)}
               <td
                 title={cell ?? 'NULL'}
-                class:edited={!!edits[start + i] && column in edits[start + i]}
+                class:edited={!!edits[index] && column in edits[index]}
+                class:editing={editing?.row === index && editing.column === column}
               >
-                {#if editing?.row === start + i && editing.column === column}
+                {#if editing?.row === index && editing.column === column}
                   <div class="cell-input-wrap">
-                    <textarea
-                      class="cell-input"
-                      aria-label={`Cell value row ${start + i + 1} ${column}`}
-                      rows="1"
-                      maxlength="1048576"
-                      spellcheck="false"
-                      use:focusEditor
-                      value={editing.draft}
-                      oninput={(event) => {
-                        if (editing) {
-                          editing.draft = event.currentTarget.value;
-                          onchange(editing.row, editing.column, editing.draft);
-                        }
-                      }}
-                      onblur={(event) => {
-                        if (!editing?.cell.contains(event.relatedTarget as Node | null))
-                          void finish();
-                      }}
-                      onkeydown={(event) => {
-                        if (event.isComposing) return;
-                        if (event.key === 'Escape') {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void finish(true, true);
-                        } else if (event.key === 'Enter' && !event.shiftKey) {
-                          event.preventDefault();
-                          void finish(true);
-                        }
-                      }}></textarea>
+                    {#if temporalKind(metadata[column]?.dataType)}
+                      <DateTimeInput
+                        value={editing.draft}
+                        type={metadata[column].dataType}
+                        label={`Cell value row ${index + 1} ${column}`}
+                        cell
+                        autofocus
+                        maxlength={1048576}
+                        onchange={input}
+                        onblur={blur}
+                        oncommit={() => void finish(true)}
+                        onrevert={() => void finish(true, true)}
+                      />
+                    {:else}
+                      <textarea
+                        class="cell-input"
+                        aria-label={`Cell value row ${index + 1} ${column}`}
+                        rows="1"
+                        maxlength="1048576"
+                        spellcheck="false"
+                        use:focusEditor
+                        value={editing.draft}
+                        oninput={(event) => input(event.currentTarget.value)}
+                        onblur={blur}
+                        onkeydown={(event) => {
+                          if (event.isComposing) return;
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void finish(true, true);
+                          } else if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            void finish(true);
+                          }
+                        }}></textarea>
+                    {/if}
                     {#if metadata[column]?.nullable}<button
                         class="set-null"
-                        aria-label={`Set row ${start + i + 1} ${column} to NULL`}
+                        aria-label={`Set row ${index + 1} ${column} to NULL`}
                         title="Set to NULL"
                         onpointerdown={(event) => event.preventDefault()}
                         onclick={() => {
-                          onchange(start + i, column, null);
+                          onchange(index, column, null);
                           void finish(true);
                         }}>NULL</button
                       >{/if}
                   </div>
-                {:else if editable && metadata[column]?.editable}
+                {:else if editable && metadata[column]?.editable && !deletedRows.includes(index)}
                   <button
                     class="editable-cell"
-                    aria-label={`Edit row ${start + i + 1} ${column}`}
+                    aria-label={`Edit row ${index + 1} ${column}`}
                     disabled={busy}
                     onclick={(event) =>
                       (editing = {
-                        row: start + i,
+                        row: index,
                         column,
                         original: cell,
                         draft: cell ?? '',
@@ -266,8 +424,8 @@
         {/each}
         {#if end < result.rows.length}<tr aria-hidden="true" class="spacer"
             ><td
-              colspan={result.columns.length + 1}
-              style:height={`${(result.rows.length - end) * rowHeight}px`}
+              colspan={columns.length + 1}
+              style:height={`${offsets[offsets.length - 1] - offsets[end]}px`}
             ></td></tr
           >{/if}
       </tbody>

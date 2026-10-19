@@ -50,6 +50,7 @@ fn browse(id: &str) -> BrowseRequest {
         sort_column: Some("id".into()),
         descending: true,
         page: 0,
+        page_size: 50,
     }
 }
 fn redis_request(id: &str, args: &[&str]) -> RedisRequest {
@@ -72,6 +73,7 @@ async fn mysql_reads_metadata_filters_sort_and_exact_decimals() {
     assert!(info.tables[0].columns.iter().all(|c| !c.editable));
     let result = app.browse(browse(&info.id)).await.unwrap();
     assert_eq!(result.rows.len(), 2);
+    assert_eq!(app.count(browse(&info.id)).await.unwrap().rows, "2");
     assert_eq!(result.rows[0][0].as_deref(), Some("2"));
     assert_eq!(
         result.rows[1][2].as_deref(),
@@ -91,6 +93,13 @@ async fn mysql_reads_metadata_filters_sort_and_exact_decimals() {
         },
     ];
     assert_eq!(app.browse(req).await.unwrap().rows.len(), 1);
+    let mut counted = browse(&info.id);
+    counted.filters = vec![Filter {
+        column: "note".into(),
+        operator: FilterOperator::IsNull,
+        value: String::new(),
+    }];
+    assert_eq!(app.count(counted).await.unwrap().rows, "1");
     let mut req = browse(&info.id);
     req.filters = vec![Filter {
         column: "label".into(),
@@ -134,6 +143,102 @@ async fn mysql_reads_metadata_filters_sort_and_exact_decimals() {
         app.browse(browse(&info.id)).await.unwrap_err().code,
         "NOT_CONNECTED"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires local Compose fixtures"]
+async fn mysql_connection_failures_identify_the_failing_check_without_secrets() {
+    let app = Workbench::default();
+    let mut settings = request(Engine::Mysql);
+    settings.password = "CANARY_BAD_PASSWORD".into();
+    let err = app.connect(settings).await.unwrap_err();
+    assert_eq!(err.code, "MYSQL_AUTH");
+    assert!(!err.message.contains("CANARY"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut settings = request(Engine::Mysql);
+    settings.port = port;
+    assert_eq!(
+        app.connect(settings).await.unwrap_err().code,
+        "MYSQL_CONNECTION"
+    );
+    let mut settings = request(Engine::Mysql);
+    settings.tls = TlsMode::VerifyFull;
+    assert_eq!(app.connect(settings).await.unwrap_err().code, "MYSQL_TLS");
+}
+
+#[tokio::test]
+#[ignore = "requires local Compose fixtures"]
+async fn mysql_private_ca_authenticates_and_reads_catalog_over_verified_tls() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    // A loopback TLS front end exercises the actual MySQL SSL request, certificate
+    // verification and authentication. The disposable backing server stays local.
+    let warm = Workbench::default();
+    let info = warm.connect(request(Engine::Mysql)).await.unwrap();
+    warm.disconnect(&info.id).await.unwrap();
+    let key = rcgen::KeyPair::from_pem(include_str!("fixtures/tls/test-only-key.pem")).unwrap();
+    let mut params = rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap();
+    let now = std::time::SystemTime::now();
+    params.not_before = (now - std::time::Duration::from_secs(60)).into();
+    params.not_after = (now + std::time::Duration::from_secs(86400)).into();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let cert = params.self_signed(&key).unwrap().pem();
+    let identity =
+        native_tls::Identity::from_pkcs8(cert.as_bytes(), key.serialize_pem().as_bytes()).unwrap();
+    let acceptor =
+        tokio_native_tls::TlsAcceptor::from(native_tls::TlsAcceptor::new(identity).unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    async fn packet<S: tokio::io::AsyncRead + Unpin>(socket: &mut S) -> Vec<u8> {
+        let mut head = [0; 4];
+        socket.read_exact(&mut head).await.unwrap();
+        let size = usize::from(head[0]) | usize::from(head[1]) << 8 | usize::from(head[2]) << 16;
+        assert!(size < 4 * 1024 * 1024);
+        let mut data = vec![0; size + 4];
+        data[..4].copy_from_slice(&head);
+        socket.read_exact(&mut data[4..]).await.unwrap();
+        data
+    }
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut backing = TcpStream::connect("127.0.0.1:13306").await.unwrap();
+        socket.write_all(&packet(&mut backing).await).await.unwrap();
+        let ssl = packet(&mut socket).await;
+        assert_eq!(ssl.len(), 36);
+        assert_ne!(ssl[5] & 0x08, 0);
+        let mut tls = acceptor.accept(socket).await.unwrap();
+        let mut login = packet(&mut tls).await;
+        login[5] &= !0x08; // Backing socket is loopback plaintext; front end is TLS.
+        login[3] -= 1;
+        backing.write_all(&login).await.unwrap();
+        loop {
+            let mut reply = packet(&mut backing).await;
+            reply[3] += 1;
+            tls.write_all(&reply).await.unwrap();
+            if reply[4] == 0 {
+                break;
+            }
+            // Warmed caching_sha2_password must use fast authentication here.
+            assert_eq!(&reply[4..], &[1, 3]);
+        }
+        let _ = tokio::io::copy_bidirectional(&mut tls, &mut backing).await;
+    });
+    let app = Workbench::default();
+    let mut settings = request(Engine::Mysql);
+    settings.host = "localhost".into();
+    settings.port = port;
+    settings.tls = TlsMode::VerifyFull;
+    settings.root_ca_pem = cert;
+    let info = app.connect(settings).await.unwrap();
+    assert_eq!(info.tables[0].name, "items");
+    app.disconnect(&info.id).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -343,7 +448,14 @@ async fn adapters_reject_unsafe_transport_and_manual_write_flags_before_connecti
         let mut r = request(engine);
         r.tls = TlsMode::VerifyFull;
         r.root_ca_pem = "unsupported CA".into();
-        assert_eq!(app.connect(r).await.unwrap_err().code, "INVALID_CONNECTION");
+        assert_eq!(
+            app.connect(r).await.unwrap_err().code,
+            if engine == Engine::Mysql {
+                "INVALID_CA"
+            } else {
+                "INVALID_CONNECTION"
+            }
+        );
         let mut r = request(engine);
         r.host = "example.com".into();
         assert_eq!(app.connect(r).await.unwrap_err().code, "TLS_REQUIRED");

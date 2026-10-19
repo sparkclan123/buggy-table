@@ -74,3 +74,11 @@ pub async fn redis_command(
 ) -> AppResult<RedisResult> {
     state.redis_command(request).await
 }
+
+#[tauri::command]
+pub async fn count_table_rows(
+    state: State<'_, Workbench>,
+    request: BrowseRequest,
+) -> AppResult<RowCount> {
+    state.count(request).await
+}

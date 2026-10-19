@@ -1,7 +1,7 @@
 //! MySQL 8 reads use a SELECT-only role, prepared values and dedicated connections.
 use crate::{
     models::*,
-    policy::{self, MAX_RESULT_BYTES, MAX_ROWS, PAGE_SIZE},
+    policy::{self, MAX_RESULT_BYTES, MAX_ROWS},
     remote_profile::RemoteProfile,
 };
 use mysql_async::{Conn, OptsBuilder, Params, Row, SslOpts, Value, prelude::Queryable};
@@ -10,11 +10,86 @@ use std::time::Instant;
 pub fn quote(value: &str) -> String {
     format!("`{}`", value.replace('`', "``"))
 }
-fn db_error(_: mysql_async::Error) -> AppError {
-    AppError::new(
-        "MYSQL_ERROR",
-        "MySQL rejected the operation. Check connectivity, verified TLS, SELECT permissions and supported column types. Server details are withheld to protect data.",
-    )
+fn db_error(error: mysql_async::Error) -> AppError {
+    use mysql_async::{DriverError, Error, IoError};
+    let (code, message) = match error {
+        Error::Io(IoError::Tls(_)) => (
+            "MYSQL_TLS",
+            "MySQL TLS verification failed. Check the certificate hostname and expiry; for a private CA, choose its PEM file. Plaintext fallback is disabled.",
+        ),
+        Error::Driver(DriverError::NoClientSslFlagFromServer) => (
+            "MYSQL_TLS",
+            "This MySQL endpoint does not offer TLS. Enable TLS on the server, or use Local only with a trusted loopback tunnel.",
+        ),
+        Error::Io(IoError::Io(ref e)) if e.kind() == std::io::ErrorKind::TimedOut => (
+            "TIMEOUT",
+            "The MySQL endpoint did not respond in time. Check the host, port, firewall and network.",
+        ),
+        Error::Io(_) | Error::Driver(DriverError::ConnectionClosed) => (
+            "MYSQL_CONNECTION",
+            "Cannot communicate with the MySQL endpoint. Check the host, port, firewall and whether the server is running.",
+        ),
+        Error::Driver(
+            DriverError::UnknownAuthPlugin { .. }
+            | DriverError::MysqlOldPasswordDisabled
+            | DriverError::CleartextPluginDisabled,
+        ) => (
+            "MYSQL_AUTH_PLUGIN",
+            "This account uses an unsupported or disabled authentication plugin. Ask the administrator for a supported MySQL 8 account; insecure authentication is not enabled.",
+        ),
+        Error::Server(ref e) => match e.code {
+            1045 | 1698 | 3118 => (
+                "MYSQL_AUTH",
+                "MySQL rejected authentication. Check the username, password, account lock status and allowed client host.",
+            ),
+            1044 | 1142 | 1143 | 1227 => (
+                "MYSQL_PERMISSION",
+                "The account lacks permission for this database or operation. Use direct SELECT / SHOW VIEW grants on the selected database; ask the administrator to verify access.",
+            ),
+            1049 => (
+                "MYSQL_DATABASE",
+                "The selected MySQL database does not exist. Check the database name, including letter case.",
+            ),
+            1040 | 1203 => (
+                "MYSQL_CONNECTION_LIMIT",
+                "MySQL has reached its connection limit. Close unused sessions or ask the administrator to check the server limit.",
+            ),
+            1129 | 1130 => (
+                "MYSQL_HOST",
+                "MySQL does not allow this client host. Ask the administrator to check the account host and blocked-host settings.",
+            ),
+            1193 | 1231 => (
+                "MYSQL_UNSUPPORTED",
+                "This endpoint does not support the required MySQL session settings. Use a compatible MySQL 8 server; MariaDB and emulated endpoints are not yet supported.",
+            ),
+            1205 | 3024 => (
+                "TIMEOUT",
+                "MySQL stopped this operation at the query or lock timeout. Narrow the filters or inspect the query plan.",
+            ),
+            1317 => ("CANCELLED", "The MySQL operation was cancelled."),
+            3159 => (
+                "MYSQL_TLS",
+                "MySQL requires an encrypted connection. Select verified TLS and provide the server's CA certificate if needed.",
+            ),
+            1146 => (
+                "MYSQL_SCHEMA_CHANGED",
+                "The table no longer exists or is not visible. Reconnect to refresh the MySQL catalog.",
+            ),
+            _ => (
+                "MYSQL_QUERY",
+                "MySQL rejected this statement. Check column types and values, then refresh the schema. Raw server messages are withheld.",
+            ),
+        },
+        Error::Driver(DriverError::PacketTooLarge) => (
+            "RESULT_LIMIT",
+            "The MySQL response exceeds the result byte limit. Select fewer or smaller columns.",
+        ),
+        _ => (
+            "MYSQL_PROTOCOL",
+            "The MySQL driver could not process this response. Check server compatibility and supported column types.",
+        ),
+    };
+    AppError::new(code, message)
 }
 
 // mysql_async normally drains pending results in a background task on Drop.
@@ -45,6 +120,11 @@ impl Drop for Database {
 }
 
 pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
+    let tls = SslOpts::default().with_root_certs(if p.root_ca_pem.is_empty() {
+        vec![]
+    } else {
+        vec![p.root_ca_pem.as_bytes().to_vec().into()]
+    });
     let opts = OptsBuilder::default()
         .ip_or_hostname(&p.host)
         .tcp_port(p.port)
@@ -54,7 +134,7 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
         .prefer_socket(false)
         .enable_cleartext_plugin(false)
         .max_allowed_packet(Some(MAX_RESULT_BYTES))
-        .ssl_opts((p.tls == TlsMode::VerifyFull).then(SslOpts::default));
+        .ssl_opts((p.tls == TlsMode::VerifyFull).then_some(tls));
     let mut conn = Database(Some(Conn::new(opts).await.map_err(db_error)?));
     let version: String = conn
         .query_first("SELECT VERSION()")
@@ -144,6 +224,7 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
                 ));
             }
             tables.push(TableInfo {
+                deletable: false,
                 relation_kind: "table".into(),
                 read_blocked_reason: None,
                 schema: schema.into(),
@@ -190,10 +271,19 @@ pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResu
         .iter()
         .find(|t| t.name == r.table)
         .ok_or_else(|| AppError::policy("Table is outside the supported MySQL scope."))?;
-    if r.page > 500 || r.filters.len() > 20 {
-        return Err(AppError::policy(
-            "Use at most 20 filters and page 501 or below.",
-        ));
+    let (sql, params) = browse_statement(p, table, r, false)?;
+    read(&mut conn, sql, params, r.checked_page_size()?).await
+}
+
+fn browse_statement(
+    p: &RemoteProfile,
+    table: &TableInfo,
+    r: &BrowseRequest,
+    count: bool,
+) -> AppResult<(String, Vec<Value>)> {
+    let page_size = r.checked_page_size()?;
+    if r.filters.len() > 20 {
+        return Err(AppError::policy("Use at most 20 filters."));
     }
     let column = |name: &str| -> AppResult<String> {
         if table.columns.iter().any(|c| c.name == name) {
@@ -232,7 +322,8 @@ pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResu
         conditions.push(expr);
     }
     let mut sql = format!(
-        "SELECT * FROM {}.{}",
+        "SELECT {} FROM {}.{}",
+        if count { "CAST(COUNT(*) AS CHAR)" } else { "*" },
         quote(&p.database),
         quote(&table.name)
     );
@@ -244,6 +335,9 @@ pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResu
                 FilterMatch::Any => " OR ",
             })
         ));
+    }
+    if count {
+        return Ok((sql, params));
     }
     let mut order = vec![];
     if let Some(name) = &r.sort_column {
@@ -266,10 +360,33 @@ pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResu
     }
     sql.push_str(&format!(
         " LIMIT {} OFFSET {}",
-        PAGE_SIZE + 1,
-        r.page as usize * PAGE_SIZE
+        page_size + 1,
+        r.page as usize * page_size
     ));
-    read(&mut conn, sql, params, PAGE_SIZE).await
+    Ok((sql, params))
+}
+
+pub async fn count(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<RowCount> {
+    let mut conn = open(p).await?;
+    let tables = approved_tables(&mut conn, &p.database).await?;
+    let table = tables
+        .iter()
+        .find(|t| t.name == r.table)
+        .ok_or_else(|| AppError::policy("Table is outside the supported MySQL scope."))?;
+    let (sql, params) = browse_statement(p, table, r, true)?;
+    conn.query_drop("SET SESSION max_execution_time = 5000")
+        .await
+        .map_err(db_error)?;
+    let started = Instant::now();
+    let rows: String = conn
+        .exec_first(sql, params)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| AppError::policy("MySQL returned no count."))?;
+    Ok(RowCount {
+        rows,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 pub async fn query(p: &RemoteProfile, r: &QueryRequest) -> AppResult<QueryResult> {
@@ -383,8 +500,10 @@ pub async fn indexes(p: &RemoteProfile, table: &str) -> AppResult<Vec<IndexInfo>
 
 pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
     let mut conn = open(p).await?;
-    let version = conn
-        .query_first::<String, _>("SELECT VERSION()")
+    let snapshot = conn
+        .query_first::<(String, String), _>(
+            "SELECT VERSION(), CONCAT(CAST(UTC_TIMESTAMP(6) AS CHAR), ' UTC')",
+        )
         .await
         .map_err(db_error)?
         .unwrap_or_default();
@@ -399,21 +518,44 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
     };
     Ok(Overview {
         database: p.database.clone(),
-        server_version: version,
-        database_size: format!("{} bytes (estimate)", size.unwrap_or_default()),
-        connections: get("Threads_connected").parse().unwrap_or(0),
-        active_connections: get("Threads_running").parse().unwrap_or(0),
+        server_version: snapshot.0,
+        database_size: format!("{} bytes (estimate)", size.clone().unwrap_or_default()),
+        database_size_bytes: size.unwrap_or_default(),
+        connections: get("Threads_connected").parse().ok(),
+        active_connections: get("Threads_running").parse().ok(),
         transactions_committed: get("Com_commit"),
         transactions_rolled_back: get("Com_rollback"),
         cache_hit_percent: None,
         stats_reset: None,
-        observed_at: "Current session · server-wide counters".into(),
+        observed_at: snapshot.1,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn server_errors_identify_the_check_and_redact_server_details() {
+        for (code, expected) in [
+            (1045, "MYSQL_AUTH"),
+            (1044, "MYSQL_PERMISSION"),
+            (1049, "MYSQL_DATABASE"),
+            (1040, "MYSQL_CONNECTION_LIMIT"),
+            (1130, "MYSQL_HOST"),
+            (1193, "MYSQL_UNSUPPORTED"),
+            (3159, "MYSQL_TLS"),
+            (3024, "TIMEOUT"),
+            (9999, "MYSQL_QUERY"),
+        ] {
+            let error = db_error(mysql_async::Error::Server(mysql_async::ServerError {
+                code,
+                message: "CANARY_PASSWORD_AND_QUERY_VALUE".into(),
+                state: "HY000".into(),
+            }));
+            assert_eq!(error.code, expected);
+            assert!(!error.message.contains("CANARY"));
+        }
+    }
     #[test]
     fn grants_fail_closed() {
         assert!(safe_grant("GRANT SELECT ON `app`.* TO `reader`@`%`"));

@@ -30,11 +30,7 @@ impl Database {
             .batch_execute(&format!("LOCK TABLE {table_sql} IN ACCESS SHARE MODE"))
             .await
             .map_err(query_error)?;
-        let tables = self.approved_tables(schema).await?;
-        let table = tables
-            .iter()
-            .find(|t| t.name == request.table)
-            .ok_or_else(|| AppError::policy("This table is outside the supported scope."))?;
+        let table = self.approved_table(schema, &request.table).await?;
         let keys: Vec<_> = table.columns.iter().filter(|c| c.primary_key).collect();
         if keys.is_empty() {
             return Err(AppError::policy(
@@ -42,7 +38,13 @@ impl Database {
             ));
         }
         let mut seen = BTreeSet::new();
+        let mut deleted_rows = 0;
         for row in &request.rows {
+            if row.delete && !table.deletable {
+                return Err(AppError::policy(
+                    "Deleting requires DELETE permission on a supported base table with a primary key.",
+                ));
+            }
             if row.original.len() != table.columns.len()
                 || table
                     .columns
@@ -101,11 +103,19 @@ impl Database {
                     column_type_sql(column)
                 ));
             }
-            let sql = format!(
-                "UPDATE ONLY {table_sql} SET {} WHERE {}",
-                assignments.join(", "),
-                predicates.join(" AND ")
-            );
+            let sql = if row.delete {
+                deleted_rows += 1;
+                format!(
+                    "DELETE FROM ONLY {table_sql} WHERE {}",
+                    predicates.join(" AND ")
+                )
+            } else {
+                format!(
+                    "UPDATE ONLY {table_sql} SET {} WHERE {}",
+                    assignments.join(", "),
+                    predicates.join(" AND ")
+                )
+            };
             let params: Vec<&(dyn ToSql + Sync)> =
                 values.iter().map(|v| v as &(dyn ToSql + Sync)).collect();
             let affected = self
@@ -123,7 +133,8 @@ impl Database {
         self.client.batch_execute("COMMIT").await.map_err(|_| AppError::new(
             "SAVE_UNCERTAIN", "The commit response was lost or rejected. Reload the table to check the database before editing again."))?;
         Ok(SaveResult {
-            updated_rows: request.rows.len(),
+            updated_rows: request.rows.len() - deleted_rows,
+            deleted_rows,
         })
     }
 }
@@ -142,7 +153,10 @@ fn validate_size(request: &SaveRequest) -> AppResult<()> {
         || request.rows.len() > 100
         || cells > 500
         || bytes > 4 * 1024 * 1024
-        || request.rows.iter().any(|r| r.changes.is_empty())
+        || request
+            .rows
+            .iter()
+            .any(|r| r.delete != r.changes.is_empty())
     {
         return Err(AppError::new(
             "EDIT_LIMIT",

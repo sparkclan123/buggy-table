@@ -11,7 +11,7 @@
 
 เริ่มจาก **PostgreSQL, MySQL และ Redis** แล้วเพิ่ม SQLite, MariaDB และฐานข้อมูลอื่นผ่าน adapter ที่มีสัญญาการทำงานและชุดทดสอบร่วมกัน ไม่พยายามทำให้ฐานข้อมูลทุกชนิดใช้ SQL หรือมี metrics เหมือนกันทั้งหมด
 
-**ปรับตามคำขอเพิ่มเติม:** ผู้ใช้เปิดหลายตารางเป็นแท็บ แก้ไขเซลล์ และกด Save ได้จริง ข้อกำหนด read-only ใช้กับ SQL/AI execution ไม่ใช่ห้ามผู้ใช้บันทึก cell edits ทั้งโปรแกรม ให้แยก typed manual UPDATE ออกจาก query policy ชัดเจน ไม่มี Delete/Truncate/Empty API
+**ปรับตามคำขอเพิ่มเติม:** ผู้ใช้เปิดหลายตารางเป็นแท็บ แก้ไขเซลล์ และเลือกแถวเพื่อเตรียมลบแล้วกด Save ได้จริง ข้อกำหนด read-only ใช้กับ SQL/AI execution ให้แยก typed manual UPDATE/DELETE ออกจาก query policy ชัดเจน ไม่มี Truncate/Empty API
 
 Manual Save ต้องมี Primary key, ตรวจ UPDATE privileges ต่อคอลัมน์, parameter binding, เทียบค่าต้นฉบับ, atomic transaction, Save/Discard และ dirty-tab protection ไม่ retry เมื่อผล COMMIT ไม่แน่นอน ส่วน AI ในอนาคตต้องใช้ strict reader session ของตนเองและไม่รับ manual-save tool รายละเอียด implementation อยู่ใน `docs/DEVELOPMENT.md` ข้อกำหนด read-only ในส่วนถัดไปหมายถึงเส้นทาง query/AI และไม่ครอบคลุม typed manual Save นี้
 
@@ -275,7 +275,7 @@ Security core ได้แก่ policy, credential handling และ audit ข
 
 | ชั้น | สิ่งที่ต้องทำ |
 |---|---|
-| Product/API | SQL/AI ไม่มี write operations; ผู้ใช้มี typed manual UPDATE สำหรับ Save เซลล์เท่านั้น ไม่มี INSERT/DELETE/TRUNCATE/DROP/FLUSH หรือ generic admin console |
+| Product/API | SQL/AI ไม่มี write operations; ผู้ใช้มี typed manual UPDATE/DELETE สำหรับ Save เซลล์และแถวที่เลือก ไม่มี INSERT/TRUNCATE/DROP/FLUSH หรือ generic admin console |
 | Parsing | parse ตาม dialect/version และตรวจ AST ทั้งต้นไม้ ไม่ใช้ regex หรือ prefix `SELECT` เป็นหลักประกัน |
 | Semantic policy | จำกัด relations, functions, operators, casts, external sources และ statement options ที่อนุญาต |
 | Server privileges | ใช้บัญชีเฉพาะที่ไม่มีสิทธิ์เขียน/เปลี่ยนสิทธิ์/รันฟังก์ชันอันตราย |
@@ -424,7 +424,7 @@ Environment label ต้องเห็นชัดทั้งใน editor แ
 ### 9.3 Result grid
 
 - Virtualize ทั้งแถวและคอลัมน์เมื่อจำเป็น ไม่ render ทุก cell ของ dataset
-- เริ่ม fetch 200 แถว; page size ปรับได้ตาม budget และใช้ keyset pagination เมื่อมี unique ordering ที่เหมาะสม
+- เริ่ม fetch 50 แถว; เลือก 100/250/500 ได้ตาม budget; keyset pagination เป็นงานถัดไป
 - ถ้าไม่มี stable key ให้ระบุว่าการเปลี่ยนข้อมูลระหว่างหน้าอาจทำให้เห็นซ้ำ/ข้าม และเสนอ bounded snapshot session เมื่อรองรับ
 - Raw SQL ใช้ cursor/stream ตาม engine; อย่าเติม `LIMIT` หรือ wrap SQL แบบเปลี่ยน semantics เงียบ ๆ
 - รองรับ null, decimal แบบไม่เสีย precision, bigint เกินขอบเขต JS number, timestamp/timezone, binary, JSON, arrays และ engine-specific types
@@ -589,7 +589,7 @@ Local AI ใช้ RAM/GPU เพิ่มหลาย GB ได้ตามโ�
 
 | Resource | ค่าเริ่มต้นที่เสนอ |
 |---|---|
-| Interactive page | 200 rows |
+| Interactive page | 50 rows default; 100/250/500 selectable |
 | Query result cap | 10,000 rows หรือ 16 MiB แล้วแต่ว่าถึงอะไรก่อน |
 | User query timeout | 15 วินาที; เพิ่มได้เฉพาะภายในเพดาน connection policy |
 | Concurrent queries | 2 ต่อ connection |

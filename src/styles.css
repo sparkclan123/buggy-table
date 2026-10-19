@@ -1319,3 +1319,183 @@ pre,
   padding: 8px;
   font-size: 12px;
 }
+
+/* Table workbench: state remains legible while scrolling or hiding controls. */
+.table-tabbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.table-tabbar::-webkit-scrollbar {
+  height: 4px;
+}
+.table-tabbar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.grid-scroll {
+  scrollbar-width: thin;
+}
+.grid-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.grid-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+.data-table td.edited,
+.data-table td.editing {
+  background: var(--edit-bg);
+  box-shadow: inset 0 0 0 1px var(--edit-border);
+}
+.data-table td.edited .editable-cell:hover {
+  background: var(--edit-bg);
+}
+.data-table td.editing .cell-input {
+  background: var(--edit-bg);
+}
+.data-table tr.row-selected:not(.pending-delete) td:not(.edited) {
+  background: var(--row-selected);
+}
+.data-table tr.pending-delete td {
+  background: var(--delete-bg);
+  color: var(--delete-ink);
+  box-shadow: inset 0 -1px var(--delete-border);
+}
+.data-table .row-number {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  border-right: 1px solid var(--border);
+}
+.data-table th.row-number {
+  z-index: 5;
+}
+.row-select {
+  display: block;
+  width: 100%;
+  min-height: 27px;
+  height: 100%;
+  padding: 0 2px;
+  font: inherit;
+  color: inherit;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.row-select:hover {
+  background: var(--hover);
+}
+.data-table th.dragging {
+  opacity: 0.45;
+}
+.column-heading[draggable='true'] {
+  cursor: grab;
+}
+.full-values .data-table td {
+  vertical-align: top;
+}
+.full-values .cell-text,
+.full-values .editable-cell {
+  height: auto;
+  min-height: 27px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 4px 8px;
+  text-overflow: clip;
+}
+.full-values .data-table .spacer td {
+  min-height: 0;
+}
+.row-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.count-notice {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pagination label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pagination select {
+  min-height: 24px;
+  padding: 2px 5px;
+  font-size: 11px;
+}
+.result-footer {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.snapshot-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 12px 0;
+}
+.redis-charts {
+  padding: 12px;
+  overflow: auto;
+}
+.redis-scan-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.redis-key-records {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.redis-key-records th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+  padding: 6px;
+  text-align: left;
+}
+.redis-key-records th:first-child {
+  width: 42px;
+}
+.redis-key-records td {
+  height: 32px;
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.redis-key-records td:first-child {
+  text-align: center;
+  color: var(--muted);
+}
+.redis-key-records button {
+  height: 31px;
+}
+.redis-key-records tr.active {
+  background: var(--selected);
+}
+.redis-info-details {
+  margin: 12px;
+  overflow: auto;
+  font-size: 12px;
+}
+.redis-info-details dl {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 2fr;
+  gap: 8px;
+}
+.redis-info-details dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+}

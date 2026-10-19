@@ -140,11 +140,15 @@ async fn measure(
                         sort_column: None,
                         descending: false,
                         page: 0,
+                        page_size: 50,
                     })
                     .await?
                 };
                 let total = started.elapsed().as_secs_f64() * 1000.0;
-                assert_eq!(result.rows.len(), 200);
+                assert_eq!(
+                    result.rows.len(),
+                    if operation == "query" { 200 } else { 50 }
+                );
                 assert_eq!(result.rows[0][0].as_deref(), Some("1"));
                 if sample > 0 {
                     totals.push(total);
@@ -157,7 +161,7 @@ async fn measure(
                 "{}",
                 serde_json::json!({
                     "tables": tables, "delayPerDirectionMs": delay_ms, "mode": if manual_edits {"manual"} else {"strict"},
-                    "operation": operation, "samples": samples, "medianTotalMs": totals[samples/2],
+                    "operation": operation, "rows": if operation == "query" {200} else {50}, "samples": samples, "medianTotalMs": totals[samples/2],
                     "p95TotalMs": totals[(samples * 95).div_ceil(100) - 1], "medianReportedMs": reported[samples/2],
                 })
             );

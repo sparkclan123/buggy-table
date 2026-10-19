@@ -89,7 +89,7 @@
       password,
       schema: engine === 'postgres' ? schema : database,
       tls,
-      rootCaPem: engine === 'postgres' && tls === 'verifyFull' ? rootCaPem : '',
+      rootCaPem: engine !== 'redis' && tls === 'verifyFull' ? rootCaPem : '',
       manualEdits: engine === 'postgres' && manualEdits,
     };
     password = '';
@@ -217,7 +217,7 @@
         TLS.
       </p>
     {/if}
-    {#if engine === 'postgres' && tls === 'verifyFull'}
+    {#if engine !== 'redis' && tls === 'verifyFull'}
       <details>
         <summary class="small">Custom CA certificate (optional)</summary>
         <label
@@ -241,12 +241,12 @@
     {/if}
     <div class="info-note">
       <ShieldCheck size={18} /><span
-        >{#if engine === 'postgres'}Save applies only the cell edits you make, using your database
-          permissions. SQL stays read-only. Turn off manual edits to require a restricted reader
-          account.{:else if engine === 'mysql'}MySQL 8.x · read-only. Use a dedicated account with
-          SELECT / SHOW VIEW grants only. Roles and write privileges are rejected.{:else}Redis ·
-          read-only commands. Use a restricted ACL user; the app does not change your server
-          permissions. Standalone endpoints only.{/if}</span
+        >{#if engine === 'postgres'}Save applies your cell edits and staged row deletions, using
+          your database permissions. SQL stays read-only. Turn off manual edits to require a
+          restricted reader account.{:else if engine === 'mysql'}MySQL 8.x · read-only. Use a
+          dedicated account with SELECT / SHOW VIEW grants only. Roles and write privileges are
+          rejected.{:else}Redis · read-only commands. Use a restricted ACL user; the app does not
+          change your server permissions. Standalone endpoints only.{/if}</span
       >
     </div>
     {#if error}<div class="error-banner" role="alert">{error}</div>{/if}

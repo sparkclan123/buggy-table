@@ -27,17 +27,22 @@
     CircleHelp,
     Check,
     Unplug,
+    ChevronUp,
+    ChevronDown,
+    Trash2,
+    WrapText,
   } from '@lucide/svelte';
   import ThemeControl from './components/ThemeControl.svelte';
   import UpdateNotice from './components/UpdateNotice.svelte';
   let updating = $state(false);
   import { onMount } from 'svelte';
-  import { guardWindowClose } from './lib/window-lifecycle';
+  import { guardWindowClose, listenForTabClose } from './lib/window-lifecycle';
   import {
     tableKey,
     createWorkspace,
     changeCell,
     changedRows,
+    pendingRows,
     type TableView as Tab,
   } from './lib/workspace';
   import RedisWorkspace from './components/RedisWorkspace.svelte';
@@ -54,6 +59,8 @@
   } from './lib/connections';
   import ResultGrid from './components/ResultGrid.svelte';
   import ResultTiming from './components/ResultTiming.svelte';
+  import SnapshotChart from './components/SnapshotChart.svelte';
+  import { numeric, type SnapshotPoint } from './lib/stats';
   import FilterBuilder from './components/FilterBuilder.svelte';
   import { api, errorMessage, desktopAvailable } from './lib/api';
   import { browseSample, sampleConnection, sampleIndexes, sampleRows } from './lib/sample';
@@ -71,7 +78,8 @@
   const activeId = $derived(session.activeId);
   const workspace = $derived(openTables.find((t) => t.id === activeId)!);
   let closeTarget = $state<string | null>(null);
-  const dirtyCount = $derived(Object.keys(workspace.edits).length);
+  const dirtyCount = $derived(pendingRows(workspace));
+  let counting = $state(false);
   const anyDirty = $derived(entries.some(hasEdits));
   const page = $derived(session.page);
   const search = $derived(session.search);
@@ -139,7 +147,19 @@
     workspace.scrollTop = 0;
     error = '';
     workspace.plan = null;
+    const countKey = JSON.stringify([
+      table.schema,
+      table.name,
+      filters,
+      workspace.appliedFilterMatch,
+    ]);
+    if (workspace.countKey !== countKey) {
+      workspace.exactCount = null;
+      workspace.countKey = countKey;
+      workspace.countNotice = '';
+    }
     workspace.pageNumber = nextPage;
+    workspace.selectedRows = [];
     if (isSample) {
       workspace.result = browseSample(
         table,
@@ -148,6 +168,7 @@
         workspace.appliedFilterMatch,
         workspace.sortColumn,
         workspace.descending,
+        workspace.pageSize,
       );
       return;
     }
@@ -167,6 +188,7 @@
         sortColumn: workspace.sortColumn,
         descending: workspace.descending,
         page: nextPage,
+        pageSize: workspace.pageSize,
       });
       if (current === epoch) {
         workspace.result = data;
@@ -213,7 +235,7 @@
     if (busy) return;
     const target = openTables.find((t) => t.id === id);
     if (!target) return;
-    if (!discard && (Object.keys(target.edits).length || target.uncertain)) {
+    if (!discard && (pendingRows(target) || target.uncertain)) {
       closeTarget = id;
       return;
     }
@@ -230,7 +252,7 @@
 
   async function saveChanges() {
     if (busy || !session.online || !selected || !dirtyCount || workspace.uncertain) return false;
-    const rows = changedRows(workspace.result, workspace.edits);
+    const rows = changedRows(workspace.result, workspace.edits, workspace.deletedRows);
     saving = true;
     busy = true;
     error = '';
@@ -245,7 +267,9 @@
                 row[selected.columns.findIndex((c) => c.name === key)] === edit.original[key],
             ),
           );
-          if (original)
+          if (original && edit.delete)
+            sampleRows[selected.name] = sampleRows[selected.name].filter((row) => row !== original);
+          else if (original)
             for (const [column, value] of Object.entries(edit.changes))
               original[selected.columns.findIndex((c) => c.name === column)] = value;
         }
@@ -259,6 +283,9 @@
         });
       }
       workspace.edits = {};
+      workspace.deletedRows = [];
+      workspace.selectedRows = [];
+      workspace.exactCount = null;
       workspace.notice = `${rows.length} row${rows.length === 1 ? '' : 's'} saved${isSample ? ' in the local sample only' : ` to ${engineName}`}.`;
     } catch (e) {
       error = errorMessage(e);
@@ -277,6 +304,8 @@
     if (busy) return;
     const reconcile = workspace.uncertain;
     workspace.edits = {};
+    workspace.deletedRows = [];
+    workspace.selectedRows = [];
     workspace.uncertain = false;
     workspace.notice = '';
     error = '';
@@ -313,6 +342,15 @@
     };
     let disposed = false;
     let unlisten = () => {};
+    let unlistenTab = () => {};
+    void listenForTabClose(requestTabClose)
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlistenTab = cleanup;
+      })
+      .catch(() => {
+        error = 'The native close-tab shortcut could not start. Use the tab close button.';
+      });
     void guardWindowClose(
       () => anyDirty || saving || updating,
       () => {
@@ -322,8 +360,7 @@
         }
         session.page = 'explorer';
         if (!busy)
-          session.activeId =
-            openTables.find((t) => Object.keys(t.edits).length || t.uncertain)?.id ?? activeId;
+          session.activeId = openTables.find((t) => pendingRows(t) || t.uncertain)?.id ?? activeId;
         error = updating
           ? 'Wait for the update to finish before closing.'
           : saving
@@ -343,6 +380,7 @@
     return () => {
       disposed = true;
       unlisten();
+      unlistenTab();
       window.removeEventListener('beforeunload', beforeUnload);
     };
   });
@@ -352,11 +390,7 @@
     const cached = entries
       .flatMap((e) => e.tabs)
       .filter(
-        (t) =>
-          t !== workspace &&
-          !Object.keys(t.edits).length &&
-          !t.uncertain &&
-          (t.result || t.queryResult),
+        (t) => t !== workspace && !pendingRows(t) && !t.uncertain && (t.result || t.queryResult),
       )
       .sort((a, b) => b.lastAccess - a.lastAccess);
     for (const tab of cached.slice(5)) {
@@ -642,14 +676,29 @@
     if (isSample || busy || !session.online) return;
     busy = true;
     error = '';
-    session.overview = null;
     try {
       session.overview = await api.overview(connection.id);
+      const previous = session.snapshots.at(-1);
+      if (
+        previous &&
+        (previous.statsReset !== session.overview.statsReset ||
+          numeric(session.overview.transactionsCommitted)! <
+            numeric(previous.transactionsCommitted)!)
+      )
+        session.snapshots = [];
+      session.snapshots = [...session.snapshots.slice(-29), session.overview];
     } catch (e) {
       error = errorMessage(e);
     } finally {
       busy = false;
     }
+  }
+
+  function metricPoints(key: keyof NonNullable<typeof overview>): SnapshotPoint[] {
+    return session.snapshots.flatMap((snapshot) => {
+      const value = numeric(snapshot[key]);
+      return value === null ? [] : [{ value, at: snapshot.observedAt }];
+    });
   }
 
   async function navigate(next: ConnectionWorkspace['page']) {
@@ -695,12 +744,98 @@
     await loadData(selected, 0);
   }
 
+  function stageDelete(rows: number[]) {
+    if (busy || !selected || workspace.uncertain) return;
+    if (!connection.manualEdits || !selected.deletable) {
+      error =
+        'This table needs a primary key and DELETE permission in a manual-edit session to delete rows.';
+      return;
+    }
+    const next = [...new Set([...workspace.deletedRows, ...rows])];
+    if (new Set([...next, ...Object.keys(workspace.edits).map(Number)]).size > 100) {
+      error = 'Save at most 100 changed or deleted rows at once.';
+      return;
+    }
+    workspace.deletedRows = next;
+    workspace.notice = '';
+    error = '';
+  }
+
+  async function changePageSize(value: number) {
+    if (busy) return;
+    if (dirtyCount || workspace.uncertain) {
+      error = 'Save or discard pending edits before changing page size.';
+      return;
+    }
+    workspace.pageSize = value;
+    await loadData(selected, 0);
+  }
+
+  async function countRows() {
+    if (busy || !selected || !session.online) return;
+    workspace.countNotice = '';
+    if (isSample) {
+      workspace.exactCount = String(
+        browseSample(
+          selected,
+          workspace.appliedFilters,
+          0,
+          workspace.appliedFilterMatch,
+          null,
+          false,
+          sampleRows[selected.name].length || 1,
+        ).rows.length,
+      );
+      return;
+    }
+    counting = true;
+    busy = true;
+    const requestId = crypto.randomUUID();
+    activeRequest = requestId;
+    try {
+      const count = await api.count({
+        connectionId: connection.id,
+        schema: selected.schema,
+        requestId,
+        table: selected.name,
+        filters: workspace.appliedFilters,
+        filterMatch: workspace.appliedFilterMatch,
+        sortColumn: null,
+        descending: false,
+        page: 0,
+        pageSize: workspace.pageSize,
+      });
+      workspace.exactCount = count.rows;
+      workspace.countNotice = `Counted in ${count.elapsedMs} ms · snapshot at count time`;
+    } catch (e) {
+      workspace.countNotice = errorMessage(e);
+    } finally {
+      busy = false;
+      counting = false;
+      activeRequest = null;
+    }
+  }
+
+  let lastTabClose = 0;
+  function requestTabClose() {
+    if (updating || busy || document.querySelector('dialog[open]')) return;
+    if (Date.now() - lastTabClose < 100) return;
+    lastTabClose = Date.now();
+    if (page === 'explorer' && connection.engine !== 'redis' && workspace.id !== 'empty')
+      closeTable(activeId);
+  }
+
   function handleShortcut(event: KeyboardEvent) {
     if (updating || event.isComposing || document.querySelector('dialog[open]')) return;
     const modifier = event.metaKey || event.ctrlKey;
     if (modifier && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       if (!busy) showManager = true;
+      return;
+    }
+    if (modifier && event.key.toLowerCase() === 'w') {
+      event.preventDefault();
+      requestTabClose();
       return;
     }
     if (!session.online) return;
@@ -968,7 +1103,7 @@
                     class="muted"
                   >
                     · {item.schema}</small
-                  >{/if}{#if Object.keys(item.edits).length || item.uncertain}<span
+                  >{/if}{#if pendingRows(item) || item.uncertain}<span
                     class="dirty-dot"
                     aria-label="Unsaved changes"
                   ></span>{/if}
@@ -1004,41 +1139,55 @@
             onclick={() => loadData()}
             disabled={busy || !selected}><RefreshCw size={13} />Refresh</button
           >
+          <button
+            class="icon-button"
+            aria-label={workspace.collapsed ? 'Show table controls' : 'Hide table controls'}
+            aria-expanded={!workspace.collapsed}
+            title={workspace.collapsed ? 'Show table controls' : 'Hide table controls'}
+            onclick={() => (workspace.collapsed = !workspace.collapsed)}
+            >{#if workspace.collapsed}<ChevronDown size={16} />{:else}<ChevronUp
+                size={16}
+              />{/if}</button
+          >
+          {#if workspace.collapsed && busy && activeRequest}<button
+              class="secondary-button"
+              onclick={cancel}>Cancel</button
+            >{/if}
         </div>
         <section class="workbench-panel">
-          <div class="tabs" role="tablist" aria-label="Table views">
-            <button
-              role="tab"
-              aria-selected={workspace.tab === 'data'}
-              class:current={workspace.tab === 'data'}
-              onclick={() => selectTab('data')}
-              disabled={busy || !selected || !!selected.readBlockedReason}
-              ><Table2 size={15} />Data</button
-            ><button
-              role="tab"
-              aria-selected={workspace.tab === 'structure'}
-              class:current={workspace.tab === 'structure'}
-              onclick={() => selectTab('structure')}
-              disabled={busy || !selected}><Columns3 size={15} />Structure</button
-            ><button
-              role="tab"
-              aria-selected={workspace.tab === 'indexes'}
-              class:current={workspace.tab === 'indexes'}
-              onclick={() => selectTab('indexes')}
-              disabled={busy || !selected || !!selected.readBlockedReason}
-              ><ListTree size={15} />Indexes</button
-            ><button
-              role="tab"
-              aria-selected={workspace.tab === 'sql'}
-              class:current={workspace.tab === 'sql'}
-              onclick={() => selectTab('sql')}
-              disabled={busy}><Code2 size={15} />SQL editor</button
-            ><span class="tab-spacer"></span><span class="small muted"
-              ><ShieldCheck size={13} />{connection.manualEdits
-                ? 'Manual edits enabled'
-                : 'Read-only session'}</span
-            >
-          </div>
+          {#if !workspace.collapsed}<div class="tabs" role="tablist" aria-label="Table views">
+              <button
+                role="tab"
+                aria-selected={workspace.tab === 'data'}
+                class:current={workspace.tab === 'data'}
+                onclick={() => selectTab('data')}
+                disabled={busy || !selected || !!selected.readBlockedReason}
+                ><Table2 size={15} />Data</button
+              ><button
+                role="tab"
+                aria-selected={workspace.tab === 'structure'}
+                class:current={workspace.tab === 'structure'}
+                onclick={() => selectTab('structure')}
+                disabled={busy || !selected}><Columns3 size={15} />Structure</button
+              ><button
+                role="tab"
+                aria-selected={workspace.tab === 'indexes'}
+                class:current={workspace.tab === 'indexes'}
+                onclick={() => selectTab('indexes')}
+                disabled={busy || !selected || !!selected.readBlockedReason}
+                ><ListTree size={15} />Indexes</button
+              ><button
+                role="tab"
+                aria-selected={workspace.tab === 'sql'}
+                class:current={workspace.tab === 'sql'}
+                onclick={() => selectTab('sql')}
+                disabled={busy}><Code2 size={15} />SQL editor</button
+              ><span class="tab-spacer"></span><span class="small muted"
+                ><ShieldCheck size={13} />{connection.manualEdits
+                  ? 'Manual edits enabled'
+                  : 'Read-only session'}</span
+              >
+            </div>{/if}
 
           {#if dirtyCount || workspace.uncertain || workspace.notice}
             <div class="save-bar" role="status">
@@ -1046,9 +1195,14 @@
                 >{workspace.notice ||
                   (workspace.uncertain
                     ? 'Save outcome unknown · reload to reconcile'
-                    : `${dirtyCount} row${dirtyCount === 1 ? '' : 's'} with unsaved changes`)}</span
+                    : `${dirtyCount} row${dirtyCount === 1 ? '' : 's'} with unsaved changes${workspace.deletedRows.length ? ` · ${workspace.deletedRows.length} pending deletion` : ''}`)}</span
               >
               {#if dirtyCount || workspace.uncertain}<div>
+                  {#if workspace.deletedRows.length}<button
+                      class="secondary-button small-button"
+                      disabled={busy}
+                      onclick={() => (workspace.deletedRows = [])}>Restore deleted rows</button
+                    >{/if}
                   <button
                     class="secondary-button small-button"
                     onclick={discardChanges}
@@ -1065,48 +1219,64 @@
             </div>
           {/if}
           {#if workspace.tab === 'data'}
-            <div class="data-toolbar">
-              <button
-                class="secondary-button"
-                class:filter-active={workspace.showFilter}
-                onclick={() => (workspace.showFilter = !workspace.showFilter)}
-                disabled={busy}
-                ><FilterIcon size={13} />Filters{#if workspace.appliedFilters.length}<span
-                    class="filter-count">{workspace.appliedFilters.length}</span
-                  >{/if}</button
-              >
-              {#if workspace.appliedFilters.length}<span class="muted small"
-                  >{workspace.appliedFilters.length} conditions · {workspace.appliedFilterMatch ===
-                  'all'
-                    ? 'AND'
-                    : 'OR'}</span
-                ><button
-                  class="icon-button"
-                  aria-label="Clear filter"
-                  onclick={clearFilters}
-                  disabled={busy}><X size={13} /></button
-                >{/if}
-              <span class="tab-spacer"></span>
-              {#if busy && activeRequest}<button class="secondary-button" onclick={cancel}
-                  ><Square size={12} />Cancel</button
-                >{/if}
-              <span class="muted small"
-                >{connection.manualEdits &&
-                selected?.columns.some((c) => c.editable) &&
-                selected?.columns.some((c) => c.primaryKey)
-                  ? 'Click to edit · ⌘/Ctrl+S save'
-                  : 'Read-only'} · ⌘/Ctrl+R refresh</span
-              >
-            </div>
-            {#if workspace.showFilter && selected}<FilterBuilder
-                table={selected}
-                bind:filters={workspace.filters}
-                bind:match={workspace.filterMatch}
-                {busy}
-                onapply={applyFilters}
-                onclear={clearFilters}
-              />{/if}
-            {#key workspace.id}<ResultGrid
+            {#if !workspace.collapsed}<div class="data-toolbar">
+                <button
+                  class="secondary-button"
+                  class:filter-active={workspace.showFilter}
+                  onclick={() => (workspace.showFilter = !workspace.showFilter)}
+                  disabled={busy}
+                  ><FilterIcon size={13} />Filters{#if workspace.appliedFilters.length}<span
+                      class="filter-count">{workspace.appliedFilters.length}</span
+                    >{/if}</button
+                >
+                {#if workspace.appliedFilters.length}<span class="muted small"
+                    >{workspace.appliedFilters.length} conditions · {workspace.appliedFilterMatch ===
+                    'all'
+                      ? 'AND'
+                      : 'OR'}</span
+                  ><button
+                    class="icon-button"
+                    aria-label="Clear filter"
+                    onclick={clearFilters}
+                    disabled={busy}><X size={13} /></button
+                  >{/if}
+                <button
+                  class="secondary-button"
+                  class:filter-active={workspace.fullValues}
+                  aria-pressed={workspace.fullValues}
+                  title="Wrap complete cell values on this page"
+                  onclick={() => {
+                    workspace.fullValues = !workspace.fullValues;
+                    workspace.scrollTop = 0;
+                  }}><WrapText size={13} />Full values</button
+                >
+                {#if workspace.selectedRows.length}<button
+                    class="secondary-button"
+                    disabled={busy || !selected?.deletable || !connection.manualEdits}
+                    onclick={() => stageDelete(workspace.selectedRows)}
+                    ><Trash2 size={13} />Delete {workspace.selectedRows.length} selected</button
+                  >{/if}
+                <span class="tab-spacer"></span>
+                {#if busy && activeRequest}<button class="secondary-button" onclick={cancel}
+                    ><Square size={12} />Cancel</button
+                  >{/if}
+                <span class="muted small"
+                  >{connection.manualEdits &&
+                  selected?.columns.some((c) => c.editable) &&
+                  selected?.columns.some((c) => c.primaryKey)
+                    ? 'Click to edit · ⌘/Ctrl+S save'
+                    : 'Read-only'} · ⌘/Ctrl+R refresh</span
+                >
+              </div>
+              {#if workspace.showFilter && selected}<FilterBuilder
+                  table={selected}
+                  bind:filters={workspace.filters}
+                  bind:match={workspace.filterMatch}
+                  {busy}
+                  onapply={applyFilters}
+                  onclear={clearFilters}
+                />{/if}{/if}
+            {#key `${connection.id}:${workspace.id}`}<ResultGrid
                 result={workspace.result}
                 table={selected}
                 {busy}
@@ -1114,6 +1284,23 @@
                   !workspace.uncertain &&
                   !!selected?.columns.some((c) => c.primaryKey)}
                 edits={workspace.edits}
+                deletedRows={workspace.deletedRows}
+                bind:selectedRows={workspace.selectedRows}
+                fullValues={workspace.fullValues}
+                rowOffset={workspace.pageNumber * workspace.pageSize}
+                layoutKey={JSON.stringify([
+                  connection.engine,
+                  connection.host,
+                  connection.port,
+                  connection.database,
+                  connection.username,
+                  workspace.schema,
+                  workspace.selectedName,
+                ])}
+                ondelete={stageDelete}
+                onlayoutwarning={() =>
+                  (error =
+                    'Column order changed for this session, but local preferences could not be saved.')}
                 bind:top={workspace.scrollTop}
                 bind:widths={workspace.columnWidths}
                 sortColumn={workspace.sortColumn}
@@ -1124,7 +1311,9 @@
             <div class="result-footer">
               <span
                 ><span class="tiny-dot"></span>{busy
-                  ? 'Reading…'
+                  ? counting
+                    ? 'Counting…'
+                    : 'Reading…'
                   : `${workspace.result?.rows.length ?? 0} rows shown`}{#if !isSample && workspace.result}<span
                     class="footer-separator">·</span
                   ><ResultTiming
@@ -1132,7 +1321,44 @@
                   />{/if}{#if workspace.result?.truncated}<span class="footer-separator">·</span
                   >More rows or byte limit reached{/if}</span
               >
+              <div
+                class="row-total"
+                title={workspace.countNotice ||
+                  'Estimated from catalog statistics. Use Count exact for a fresh count.'}
+              >
+                <span
+                  >{workspace.exactCount !== null
+                    ? `${workspace.exactCount} ${workspace.appliedFilters.length ? 'matching' : 'total'} rows`
+                    : isSample
+                      ? `${workspace.result ? (sampleRows[selected?.name ?? '']?.length ?? 0) : 0} total rows`
+                      : selected?.estimatedRows != null
+                        ? `~${selected.estimatedRows.toLocaleString()} total rows`
+                        : 'Total rows unknown'}</span
+                >
+                <button
+                  class="secondary-button small-button"
+                  disabled={busy || !selected}
+                  onclick={countRows}>Count exact</button
+                >
+                {#if workspace.countNotice}<span class="count-notice" role="status"
+                    >{workspace.countNotice}</span
+                  >{/if}
+              </div>
               <div class="pagination">
+                <label
+                  >Rows <select
+                    aria-label="Rows per page"
+                    value={workspace.pageSize}
+                    disabled={busy || dirtyCount > 0 || workspace.uncertain}
+                    onchange={async (event) => {
+                      const input = event.currentTarget;
+                      await changePageSize(Number(input.value));
+                      input.value = String(workspace.pageSize);
+                    }}
+                  >
+                    {#each [50, 100, 250, 500] as size}<option value={size}>{size}</option>{/each}
+                  </select></label
+                >
                 <span>Page {workspace.pageNumber + 1}</span><button
                   class="icon-button"
                   aria-label="Previous page"
@@ -1144,7 +1370,7 @@
                   aria-label="Next page"
                   disabled={busy ||
                     !workspace.result?.truncated ||
-                    workspace.result.rows.length < 200}
+                    workspace.result.rows.length < workspace.pageSize}
                   onclick={() => loadData(selected, workspace.pageNumber + 1)}
                   ><ChevronRight size={16} /></button
                 >
@@ -1272,42 +1498,55 @@
             <button class="primary-button" onclick={openConnection}
               ><PlugZap size={16} />Connect database</button
             >
-          </div>{:else if overview}<div class="metric-grid">
-            <article>
-              <span>Database size</span><strong>{overview.databaseSize}</strong><small
-                >Current database</small
-              >
-            </article>
-            <article>
-              <span>Connections</span><strong>{overview.connections}</strong><small
-                >{overview.activeConnections} active sessions visible to this role</small
-              >
-            </article>
-            <article>
-              <span>Buffer cache hit rate</span><strong
-                >{overview.cacheHitPercent === null
-                  ? 'Unavailable'
-                  : `${overview.cacheHitPercent.toFixed(2)}%`}</strong
-              ><small>Cumulative · not a health score</small>
-            </article>
-            <article>
-              <span
-                >{connection.engine === 'mysql'
-                  ? 'COMMIT statements'
-                  : 'Transactions committed'}</span
-              ><strong>{overview.transactionsCommitted}</strong><small
-                >{overview.transactionsRolledBack}
-                {connection.engine === 'mysql'
-                  ? 'ROLLBACK statements · server-wide; excludes autocommit'
-                  : 'rolled back'}</small
-              >
-            </article>
+          </div>{:else if overview}
+          <div class="snapshot-charts" aria-label="Database snapshot graphs">
+            <SnapshotChart
+              label="Database size"
+              value={overview.databaseSizeBytes ?? null}
+              unit="bytes"
+              points={metricPoints('databaseSizeBytes')}
+            />
+            <SnapshotChart
+              label="Connections"
+              value={overview.connections}
+              unit="connections"
+              points={metricPoints('connections')}
+            />
+            <SnapshotChart
+              label="Active connections"
+              value={overview.activeConnections}
+              unit="connections"
+              points={metricPoints('activeConnections')}
+            />
+            <SnapshotChart
+              label="Buffer cache hit rate"
+              value={overview.cacheHitPercent === null ? null : overview.cacheHitPercent.toFixed(2)}
+              unit="%"
+              ceiling={100}
+              points={metricPoints('cacheHitPercent')}
+            />
+            <SnapshotChart
+              label={connection.engine === 'mysql' ? 'COMMIT statements' : 'Committed transactions'}
+              value={overview.transactionsCommitted}
+              points={metricPoints('transactionsCommitted')}
+            />
+            <SnapshotChart
+              label={connection.engine === 'mysql'
+                ? 'ROLLBACK statements'
+                : 'Rolled-back transactions'}
+              value={overview.transactionsRolledBack}
+              points={metricPoints('transactionsRolledBack')}
+            />
           </div>
           <div class="detail-card">
             <h3>About this snapshot</h3>
             <dl>
               <dt>Source</dt>
-              <dd>pg_stat_database · pg_stat_activity</dd>
+              <dd>
+                {connection.engine === 'mysql'
+                  ? 'information_schema.TABLES · SHOW GLOBAL STATUS (server-wide)'
+                  : 'pg_stat_database · pg_stat_activity'}
+              </dd>
               <dt>Observed at</dt>
               <dd>{overview.observedAt}</dd>
               <dt>Statistics reset</dt>
@@ -1340,10 +1579,10 @@
             <h3>Explicit saves, protected queries</h3>
             <p>
               SQL is checked in Rust and runs in read-only transactions. Redis commands use a read
-              allowlist. PostgreSQL manual cell saves use a separate, permission-checked UPDATE
-              operation with conflict detection.
+              allowlist. PostgreSQL manual cell saves use a separate, permission-checked UPDATE /
+              DELETE operation with conflict detection. Row deletion stays pending until you save.
             </p>
-            <span class="badge">No delete or truncate tools</span>
+            <span class="badge">No automatic writes or truncate tools</span>
           </article>
           <article class="detail-card">
             <Database size={22} />
@@ -1364,7 +1603,7 @@
               query history or result caches to disk. Saved connection settings and table tab
               identities stay in the local app data folder; passwords are saved only when selected,
               in the operating system password store. Appearance and update preferences are stored
-              locally.
+              locally, along with column order preferences for each table.
             </p>
             <span class="badge">No query/result persistence</span>
           </article>

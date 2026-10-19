@@ -20,6 +20,15 @@ export function createWorkspace(table?: TableInfo, engine = 'postgres') {
     descending: false,
     columnWidths: {} as Record<string, number>,
     pageNumber: 0,
+    pageSize: 50,
+    fullValues: false,
+    collapsed: false,
+    selectedRows: [] as number[],
+    deletedRows: [] as number[],
+    exactCount: null as string | null,
+    countKey: '',
+    countNotice: '',
+
     result: null as QueryResult | null,
     queryResult: null as QueryResult | null,
     indexes: [] as IndexInfo[],
@@ -36,13 +45,22 @@ export function createWorkspace(table?: TableInfo, engine = 'postgres') {
 }
 export type TableWorkspace = ReturnType<typeof createWorkspace>;
 
-export function changedRows(result: QueryResult | null, edits: CellEdits): RowChange[] {
+export function pendingRows(workspace: TableWorkspace) {
+  return new Set([...Object.keys(workspace.edits).map(Number), ...workspace.deletedRows]).size;
+}
+
+export function changedRows(
+  result: QueryResult | null,
+  edits: CellEdits,
+  deleted: number[] = [],
+): RowChange[] {
   if (!result) return [];
-  return Object.entries(edits).map(([row, changes]) => ({
+  return [...new Set([...Object.keys(edits).map(Number), ...deleted])].map((row) => ({
     original: Object.fromEntries(
-      result.columns.map((column, index) => [column, result.rows[Number(row)][index]]),
+      result.columns.map((column, index) => [column, result.rows[row][index]]),
     ),
-    changes: { ...changes },
+    changes: deleted.includes(row) ? {} : { ...edits[row] },
+    ...(deleted.includes(row) ? { delete: true } : {}),
   }));
 }
 
@@ -52,7 +70,7 @@ export function changeCell(
   column: string,
   value: string | null,
 ) {
-  if (!workspace.result) return;
+  if (!workspace.result || workspace.deletedRows.includes(row)) return;
   const original = workspace.result.rows[row][workspace.result.columns.indexOf(column)];
   if (value === original) {
     delete workspace.edits[row]?.[column];

@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AppError,
+  RowCount,
   SavedConnection,
   ConnectedProfile,
   ProfileLayout,
@@ -54,6 +55,7 @@ export const api = {
     call<QueryResult>('run_query', { request: { connectionId, requestId, sql, explain, schema } }),
   cancel: (connectionId: string, requestId: string) =>
     call<void>('cancel_query', { connectionId, requestId }),
+  count: (request: BrowseRequest) => call<RowCount>('count_table_rows', { request }),
   browse: (request: BrowseRequest) => call<QueryResult>('browse_table', { request }),
   indexes: (connectionId: string, table: string, schema?: string) =>
     call<IndexInfo[]>('inspect_table', { connectionId, table, schema }),

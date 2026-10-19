@@ -19,6 +19,12 @@
   --error-border: #cbb4b4;
   --error-bg: #fff8f8;
   --error-ink: #7f3030;
+  --edit-bg: #fff2c6;
+  --edit-border: #c4952c;
+  --row-selected: #e3eefb;
+  --delete-bg: #ffe2e3;
+  --delete-ink: #812d35;
+  --delete-border: #d8979d;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -41,4 +47,10 @@
   --error-border: #735354;
   --error-bg: #322528;
   --error-ink: #edb9bc;
+  --edit-bg: #4a3c20;
+  --edit-border: #b29142;
+  --row-selected: #263d56;
+  --delete-bg: #512d34;
+  --delete-ink: #ffd5d9;
+  --delete-border: #a4626d;
 }

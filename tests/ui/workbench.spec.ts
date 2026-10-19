@@ -15,10 +15,10 @@ test('sample browsing, filters and pagination work without external requests', a
   await page.getByLabel('Filter 1 column').selectOption('status');
   await page.getByLabel('Filter 1 value').fill('completed');
   await page.getByRole('button', { name: 'Apply filters' }).click();
-  await expect(page.getByText('150 rows shown')).toBeVisible();
+  await expect(page.getByText('50 rows shown')).toBeVisible();
   await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Clear filter', exact: true }).click();
-  await expect(page.getByText('200 rows shown')).toBeVisible();
+  await expect(page.getByText('50 rows shown')).toBeVisible();
   const rendered = await page
     .getByRole('table', { name: 'Query results' })
     .locator('tbody tr')
@@ -229,7 +229,7 @@ test('header sorting covers the whole dataset before paging and respects pending
   );
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit row 1 total', exact: true })).toHaveText(
-    '3437.50',
+    '5500.00',
   );
   await page.getByRole('button', { name: 'Edit row 1 customer', exact: true }).click();
   await page.getByRole('textbox', { name: /^Cell value row/ }).fill('Pending');
@@ -262,7 +262,7 @@ test('multiple filters support AND, OR, removal and tab persistence', async ({
   await expect(page.getByLabel('Filter 2 value')).toHaveValue('completed');
   await page.getByLabel('Match filters').selectOption('any');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect(page.getByText('157 rows shown')).toBeVisible();
+  await expect(page.getByText('50 rows shown')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('compact-filters.png') });
   await page.getByRole('button', { name: 'Remove filter 2', exact: true }).click();
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
@@ -330,7 +330,14 @@ test('Redis UI scans, inspects TTL, displays values as text, and refreshes witho
           if (args[0] === 'GET')
             return { value: { preview: '<script>window.INJECTED=true</script>' }, elapsedMs: 1 };
           if (args[0] === 'PING') return { value: 'PONG', elapsedMs: 1 };
-          if (args[0] === 'INFO') return { value: `${args[1]} fixture information`, elapsedMs: 1 };
+          if (args[0] === 'INFO')
+            return {
+              value:
+                args[1] === 'server'
+                  ? '# Server\r\nuptime_in_seconds:86400\r\nhz:10\r\nrun_id:fixture'
+                  : '# Memory\r\nused_memory:1048576\r\nused_memory_rss:2097152\r\nused_memory_peak:3145728\r\nmem_fragmentation_ratio:2',
+              elapsedMs: 1,
+            };
           throw { code: 'POLICY_DENIED', message: 'Only bounded reads are allowed.' };
         }
         return null;
@@ -361,7 +368,7 @@ test('Redis UI scans, inspects TTL, displays values as text, and refreshes witho
   ).toEqual({ local: 0, session: 0 });
   await page.screenshot({ path: testInfo.outputPath('redis-workspace.png'), fullPage: true });
   await page.getByRole('button', { name: 'Database overview', exact: true }).click();
-  await expect(page.getByLabel('Redis value')).toContainText('server fixture information');
+  await expect(page.getByRole('img', { name: /Server uptime graph/ })).toBeVisible();
   await page.getByRole('button', { name: 'memory', exact: true }).click();
-  await expect(page.getByLabel('Redis value')).toContainText('memory fixture information');
+  await expect(page.getByRole('img', { name: /Memory used graph/ })).toBeVisible();
 });

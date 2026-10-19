@@ -27,7 +27,7 @@
   }}
 >
   <h2 id="close-title">Unsaved changes in {name}</h2>
-  <p>Save your cell edits before closing this tab, or discard them.</p>
+  <p>Save your edits and staged row deletions before closing this tab, or discard them.</p>
   <div class="dialog-footer">
     <button class="secondary-button" onclick={oncancel} disabled={busy}>Keep editing</button>
     <button class="secondary-button" onclick={ondiscard} disabled={busy}>Discard & close</button>

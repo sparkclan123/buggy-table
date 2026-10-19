@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DateTimeInput from './DateTimeInput.svelte';
   import { Plus, X } from '@lucide/svelte';
   import type { Filter, FilterMatch, TableInfo } from '../lib/types';
   let {
@@ -16,6 +17,15 @@
     onapply: (event: SubmitEvent) => void;
     onclear: () => void;
   } = $props();
+  const operators = [
+    ['equals', '=', 'Equals'],
+    ['notEquals', '≠', 'Not equal'],
+    ['contains', '∋', 'Contains'],
+    ['greaterThan', '>', 'Greater than'],
+    ['lessThan', '<', 'Less than'],
+    ['isNull', '∅', 'Is NULL'],
+    ['isNotNull', '≠ ∅', 'Is not NULL'],
+  ];
 </script>
 
 <form class="filter-builder" onsubmit={onapply}>
@@ -45,20 +55,25 @@
         <select aria-label={`Filter ${index + 1} column`} bind:value={filter.column}>
           {#each table.columns as column}<option value={column.name}>{column.name}</option>{/each}
         </select>
-        <select aria-label={`Filter ${index + 1} operator`} bind:value={filter.operator}>
-          <option value="equals">equals</option><option value="notEquals">does not equal</option
-          ><option value="contains">contains</option><option value="greaterThan"
-            >greater than</option
-          ><option value="lessThan">less than</option><option value="isNull">is null</option><option
-            value="isNotNull">is not null</option
-          >
+        <select
+          aria-label={`Filter ${index + 1} operator`}
+          title={operators.find(([value]) => value === filter.operator)?.[2]}
+          bind:value={filter.operator}
+        >
+          {#each operators as [value, symbol, description]}<option
+              {value}
+              title={description}
+              aria-label={description}>{symbol}</option
+            >{/each}
         </select>
-        <input
-          aria-label={`Filter ${index + 1} value`}
-          bind:value={filter.value}
-          placeholder="Value"
-          disabled={filter.operator === 'isNull' || filter.operator === 'isNotNull'}
-          maxlength="4096"
+        <DateTimeInput
+          label={`Filter ${index + 1} value`}
+          value={filter.value}
+          type={filter.operator === 'contains'
+            ? ''
+            : (table.columns.find((c) => c.name === filter.column)?.dataType ?? '')}
+          onchange={(value) => (filter.value = value)}
+          disabled={busy || filter.operator === 'isNull' || filter.operator === 'isNotNull'}
         />
         <button
           class="icon-button"

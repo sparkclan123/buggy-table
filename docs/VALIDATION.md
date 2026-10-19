@@ -1,4 +1,27 @@
-# Validation — 0.1.0 preview
+# Validation history
+
+## Grid and issue fixes — 0.1.7 Preview, 2026-10-19
+
+- Open source issues #3–#6 were read and addressed in code: actionable MySQL connection errors/private CA, PostgreSQL/MySQL snapshot graphs, Redis INFO graphs, and Redis SCAN key records. No issue comments or closures were posted.
+- Playwright: **84 passed**, Chromium and WebKit. New coverage includes page sizes 50/100/250/500, explicit counts without automatic count requests, symbol filters, typed/calendar timestamp edits and filters with microseconds/offset preservation, local column drag/keyboard reorder with correct cell ownership, highlighted drafts, staged deletion/restore/save, Cmd+W dirty guards, collapsed controls, full values with variable-height virtualization, sticky row numbers, Redis cursor accumulation/deduplication/search/command scans and INFO permission errors. Database/Redis browser tests use explicit IPC doubles; real adapters are tested below.
+- PostgreSQL integration: **26 passed on each of 15, 16, 17 and 18** against separate disposable loopback fixtures. New tests verify page boundaries, invalid page limits, exact filtered counts, mixed delete/update atomic commit, rollback after stale-row conflicts, revoked DELETE permission and reader rejection. Existing catalog completeness, typed JSON/arrays/enums, precision, cancellation and schema isolation checks still pass.
+- Multi-engine integration: **10 passed** against MySQL 8.4 and Redis 8. MySQL tests include bound exact counts, real authentication/network/untrusted-TLS errors and a successful private-CA TLS handshake/authentication/catalog read through a loopback TLS front end to the disposable MySQL fixture. No public or production database was contacted.
+- Frontend unit tests: **5 passed**. Rust policy/unit/transport checks and Clippy pass. Svelte/TypeScript reports no errors/warnings; Prettier, cargo fmt and git diff whitespace checks pass.
+- Native macOS ARM64 debug bundle: connected through actual Tauri IPC to the local PostgreSQL fixture without remembering credentials/settings. Count exact returned a real count; Cmd+W showed Save/Discard/Keep editing for a draft, Discard & close removed that tab, and another Cmd+W closed the remaining tab while keeping the app window open. Test connection was disconnected and the app quit. No production bookmark was connected.
+- Light/dark graph screenshots and the wrapped/sticky grid were inspected. Numeric graph labels use grouping; unknown metrics remain unavailable rather than zero.
+- Final color checks cover actual computed cell backgrounds: selected pending deletions override selection blue in both themes, and active cell inputs retain the edit highlight. Focused grid/appearance tests were rerun after this CSS correction.
+- macOS ARM64 release-mode `.app` built successfully (15.81 MiB) and passed `codesign --verify --deep --strict`. This is an ad-hoc-signed local build, not a notarized release or a published updater artifact. This pre-release validation build used version 0.1.6; the distribution version is 0.1.7. Final installer provenance and CI results are recorded in the release BUILD_INFO.txt.
+
+Performance experiment: release-mode backend, 100 synthetic tables, one warmup then five samples, proxy adding 10 ms per forwarded TCP chunk in each direction. Values include connection/validation/transfer, excluding UI rendering. Browse uses the new default 50 rows; SQL returns 200 rows. These are controlled loopback measurements, not production-server guarantees or a general performance certification.
+
+| Mode | Operation | Rows | Median | P95 |
+| --- | --- | ---: | ---: | ---: |
+| Manual | Browse | 50 | 242.0 ms | 247.0 ms |
+| Manual | SELECT | 200 | 258.8 ms | 260.1 ms |
+| Strict reader | Browse | 50 | 325.9 ms | 330.5 ms |
+| Strict reader | SELECT | 200 | 341.5 ms | 342.4 ms |
+
+Browse/count/save now fetch metadata only for their selected relation. Count exact is opt-in with a five-second server query timeout; it is never part of initial page loading. OFFSET paging and 4 MiB result limits remain; full values changes display wrapping only. Windows native execution and public-trust production endpoints were not exercised in this update.
 
 Environment: macOS ARM64, Rust 1.99.0, Node 22.22.2. Database tests use the disposable PostgreSQL 17 Compose fixture.
 

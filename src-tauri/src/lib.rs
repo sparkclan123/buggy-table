@@ -14,6 +14,8 @@ mod commands;
 #[cfg(feature = "desktop")]
 mod connection_commands;
 #[cfg(feature = "desktop")]
+mod desktop_menu;
+#[cfg(feature = "desktop")]
 mod updates;
 
 #[cfg(feature = "desktop")]
@@ -22,6 +24,7 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(profiles::Profiles::new(app.path().app_local_data_dir()?));
+            desktop_menu::install(app)?;
             Ok(())
         })
         .manage(service::Workbench::default())
@@ -40,6 +43,7 @@ pub fn run() {
             commands::run_query,
             commands::cancel_query,
             commands::browse_table,
+            commands::count_table_rows,
             commands::inspect_table,
             commands::get_overview,
             commands::save_table_changes,
