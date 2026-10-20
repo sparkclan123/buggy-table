@@ -8,7 +8,7 @@
 
 ตารางชื่อเดียวกันในคนละฐานข้อมูลเปิดแยกแท็บได้ Browse, filters, counts และ indexes ยึดฐานข้อมูลของแท็บนั้น SQL ต้องใช้ชื่อแบบ `database.table` ถ้า Remember connection เปิดอยู่ สามารถบันทึก connection ที่ไม่มี default database และคืนแท็บเดิมหลัง reconnect ได้
 
-บัญชี admin และบัญชีที่มีสิทธิ์เขียนเชื่อมต่อได้ แต่ MySQL ในแอปยังอ่านอย่างเดียว ทุก operation เปิด read-only transaction และตรวจคำสั่ง SELECT ก่อนส่งไปเซิร์ฟเวอร์ Views, generated columns, storage engines และชนิดข้อมูลที่ยังอ่านไม่ได้จะแสดงโครงสร้างพร้อมเหตุผล ไม่ซ่อนตารางทั้งรายการ
+บัญชี admin และบัญชีที่มีสิทธิ์เขียนเชื่อมต่อได้ แต่ MySQL ในแอปยังอ่านอย่างเดียว ทุก session ตั้ง transaction_read_only และ autocommit พร้อมตรวจคำสั่ง SELECT ก่อนส่งไปเซิร์ฟเวอร์ อ่านสำเร็จแล้วใช้ connection เดิมซ้ำโดยไม่ค้าง transaction Views, generated columns, storage engines และชนิดข้อมูลที่ยังอ่านไม่ได้จะแสดงโครงสร้างพร้อมเหตุผล ไม่ซ่อนตารางทั้งรายการ
 
 อ้างอิง: [MySQL default database is optional](https://dev.mysql.com/doc/refman/8.4/en/connecting.html), [read-only transactions](https://dev.mysql.com/doc/refman/8.4/en/commit.html)
 

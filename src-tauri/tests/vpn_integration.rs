@@ -65,8 +65,11 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
     let (a, sa) = profile(0);
     let (b, sb) = profile(1);
     let owner = a.owner.clone();
-    let route_a = runtime.start(a, sa, "vpn-db.test", 5432).await.unwrap();
-    let route_b = runtime.start(b, sb, "vpn-db.test", 5432).await.unwrap();
+    let (route_a, route_b) = tokio::try_join!(
+        runtime.start(a, sa, "vpn-db.test", 5432),
+        runtime.start(b, sb, "vpn-db.test", 5432)
+    )
+    .unwrap();
     eprintln!(
         "Two independent VPN handshakes and DNS/TCP preflights: {:?}",
         started.elapsed()
@@ -92,11 +95,27 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
     let qb = workbench.query(query(&b.id)).await.unwrap();
     assert_eq!(qa.rows[0][1].as_deref(), Some("A"));
     assert_eq!(qb.rows[0][1].as_deref(), Some("B"));
-    for _ in 0..5 {
-        let result = workbench.query(query(&a.id)).await.unwrap();
-        assert!(result.timings.unwrap().connection_reused);
-        eprintln!("Reused VPN database query: {} ms", result.elapsed_ms);
+    let mut switches = vec![];
+    for _ in 0..15 {
+        // Alternate the two already-connected networks, including overlapping
+        // private IPs/DNS, without replacing either tunnel or DB transport.
+        for (connection, expected) in [(&a, "A"), (&b, "B")] {
+            let started = Instant::now();
+            let result = workbench.query(query(&connection.id)).await.unwrap();
+            switches.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert!(result.timings.unwrap().connection_reused);
+            assert_eq!(result.rows[0][1].as_deref(), Some(expected));
+        }
     }
+    switches.sort_by(f64::total_cmp);
+    eprintln!(
+        "30 alternating VPN reads: median {:.2} ms, p95 {:.2} ms",
+        switches[15], switches[28]
+    );
+    let (qa, qb) =
+        tokio::try_join!(workbench.query(query(&a.id)), workbench.query(query(&b.id))).unwrap();
+    assert_eq!(qa.rows[0][1].as_deref(), Some("A"));
+    assert_eq!(qb.rows[0][1].as_deref(), Some("B"));
     assert_eq!(
         workbench.vpn_status(&a.id, true).await.unwrap().state,
         "ready"

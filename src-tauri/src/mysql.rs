@@ -1,11 +1,11 @@
-//! MySQL 8 reads use guarded SELECTs, read-only transactions and dedicated connections.
+//! MySQL 8 reads use guarded SELECTs and one reusable, read-only transport per workspace.
 use crate::{
     models::*,
     policy::{self, MAX_RESULT_BYTES, MAX_ROWS},
     remote_profile::RemoteProfile,
 };
 use mysql_async::{Conn, OptsBuilder, Params, Row, SslOpts, Value, prelude::Queryable};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub fn quote(value: &str) -> String {
     format!("`{}`", value.replace('`', "``"))
@@ -97,6 +97,10 @@ fn db_error(error: mysql_async::Error) -> AppError {
 pub struct Database {
     conn: Option<Conn>,
     version: String,
+    reused: bool,
+    reusable: bool,
+    idle_since: Instant,
+    connection_ms: u64,
 }
 impl std::ops::Deref for Database {
     type Target = Conn;
@@ -123,6 +127,38 @@ impl Drop for Database {
 }
 
 pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
+    let started = Instant::now();
+    let idle = p.mysql_idle.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(mut db) = idle
+        && !db.is_disconnected()
+    {
+        // No extra network round trip on an active workspace. After an idle
+        // period, detect server/network expiry before sending an application read.
+        if db.idle_since.elapsed() < Duration::from_secs(30) || db.ping().await.is_ok() {
+            db.reused = true;
+            db.connection_ms = started.elapsed().as_millis() as u64;
+            return Ok(db);
+        }
+    }
+    let mut db = open_dedicated(p).await?;
+    db.connection_ms = started.elapsed().as_millis() as u64;
+    Ok(db)
+}
+
+fn recycle(p: &RemoteProfile, mut db: Database) {
+    // Only call after successful, fully consumed, session-neutral operations.
+    // Errors, timeout/cancellation and incomplete reads drop/close the transport.
+    if db.reusable
+        && !db.is_disconnected()
+        && let Ok(mut slot) = p.mysql_idle.lock()
+    {
+        db.idle_since = Instant::now();
+        *slot = Some(db);
+    }
+}
+
+async fn open_dedicated(p: &RemoteProfile) -> AppResult<Database> {
+    let started = Instant::now();
     let tls = SslOpts::default()
         .with_danger_accept_invalid_certs(p.tls == TlsMode::Require)
         .with_danger_skip_domain_validation(p.tls == TlsMode::Require)
@@ -140,6 +176,7 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
         .db_name((!p.database.is_empty()).then(|| p.database.clone()))
         .prefer_socket(false)
         .enable_cleartext_plugin(false)
+        .stmt_cache_size(32)
         .max_allowed_packet(Some(MAX_RESULT_BYTES))
         .ssl_opts((p.tls != TlsMode::LocalOnly).then_some(tls));
     let raw = Conn::new(opts).await.map_err(|error| {
@@ -150,6 +187,10 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
     let mut conn = Database {
         conn: Some(raw),
         version: String::new(),
+        reused: false,
+        reusable: true,
+        idle_since: Instant::now(),
+        connection_ms: 0,
     };
     let version: String = conn
         .query_first("SELECT VERSION()")
@@ -163,12 +204,11 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
     }
     conn.version = version;
     // Account privileges do not enable writes in the application. Every operation
-    // uses fixed metadata SQL or a reconstructed SELECT, within a read-only
-    // transaction. Never send unvalidated user SQL, functions or views.
-    conn.query_drop("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES', max_execution_time = 10000, lock_wait_timeout = 2").await.map_err(db_error)?;
-    conn.query_drop("START TRANSACTION READ ONLY")
-        .await
-        .map_err(db_error)?;
+    // uses fixed metadata SQL or a reconstructed SELECT. Session READ ONLY
+    // covers every implicit transaction; autocommit prevents idle snapshots,
+    // metadata locks and stale reads between operations on a retained socket.
+    conn.query_drop("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES', max_execution_time = 10000, lock_wait_timeout = 2, transaction_read_only = 1, autocommit = 1").await.map_err(db_error)?;
+    conn.connection_ms = started.elapsed().as_millis() as u64;
     Ok(conn)
 }
 
@@ -199,13 +239,16 @@ pub async fn schemas(p: &RemoteProfile) -> AppResult<Vec<String>> {
             "This server exposes more than 1000 databases.",
         ));
     }
+    recycle(p, conn);
     Ok(names)
 }
 
 pub async fn schema_tables(p: &RemoteProfile, schema: &str) -> AppResult<Vec<TableInfo>> {
     let schema = selected_database(p, Some(schema))?;
     let mut conn = open(p).await?;
-    tables(&mut conn, schema).await
+    let tables = checked_catalog(p, &mut conn, schema, None).await?;
+    recycle(p, conn);
+    Ok(tables)
 }
 
 pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> {
@@ -317,6 +360,24 @@ async fn catalog(conn: &mut Conn, schema: &str, table: Option<&str>) -> AppResul
     Ok(tables)
 }
 
+async fn checked_catalog(
+    p: &RemoteProfile,
+    conn: &mut Database,
+    schema: &str,
+    table: Option<&str>,
+) -> AppResult<Vec<TableInfo>> {
+    let result = catalog(conn, schema, table).await;
+    if conn.reused && result.as_ref().is_err_and(|e| e.code == "MYSQL_CONNECTION") {
+        // Retry only fixed catalog SQL, before executing any user statement.
+        // A failure during execution never replays the user's query.
+        let previous_ms = conn.connection_ms;
+        *conn = open_dedicated(p).await?;
+        conn.connection_ms += previous_ms;
+        return catalog(conn, schema, table).await;
+    }
+    result
+}
+
 pub async fn connect(p: &RemoteProfile, id: String) -> AppResult<ConnectionInfo> {
     let mut conn = open(p).await?;
     let version = conn.version.clone();
@@ -325,21 +386,30 @@ pub async fn connect(p: &RemoteProfile, id: String) -> AppResult<ConnectionInfo>
     } else {
         tables(&mut conn, &p.database).await?
     };
+    recycle(p, conn);
     Ok(p.info(id, version, tables))
 }
 
-async fn approved_table(conn: &mut Conn, schema: &str, name: &str) -> AppResult<TableInfo> {
-    catalog(conn, schema, Some(name)).await?.into_iter()
+async fn approved_table(
+    p: &RemoteProfile,
+    conn: &mut Database,
+    schema: &str,
+    name: &str,
+) -> AppResult<TableInfo> {
+    checked_catalog(p, conn, schema, Some(name)).await?.into_iter()
         .find(|t| t.name == name && t.read_blocked_reason.is_none())
         .ok_or_else(|| AppError::policy("Table is not readable in this database. Refresh its catalog to inspect supported types and permissions."))
 }
 
 pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResult> {
+    let started = Instant::now();
     let mut conn = open(p).await?;
     let schema = selected_database(p, r.schema.as_deref())?;
-    let table = approved_table(&mut conn, schema, &r.table).await?;
+    let table = approved_table(p, &mut conn, schema, &r.table).await?;
     let (sql, params) = browse_statement(&table, r, false)?;
-    read(&mut conn, sql, params, r.checked_page_size()?).await
+    let validation_ms = (started.elapsed().as_millis() as u64).saturating_sub(conn.connection_ms);
+    let result = read(&mut conn, sql, params, r.checked_page_size()?, true).await?;
+    Ok(finish_read(p, conn, result, started, validation_ms))
 }
 
 fn browse_statement(
@@ -433,9 +503,10 @@ fn browse_statement(
 }
 
 pub async fn count(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<RowCount> {
-    let mut conn = open(p).await?;
+    // Counts change the session timeout and may be expensive; keep them dedicated.
+    let mut conn = open_dedicated(p).await?;
     let schema = selected_database(p, r.schema.as_deref())?;
-    let table = approved_table(&mut conn, schema, &r.table).await?;
+    let table = approved_table(p, &mut conn, schema, &r.table).await?;
     let (sql, params) = browse_statement(&table, r, true)?;
     conn.query_drop("SET SESSION max_execution_time = 5000")
         .await
@@ -453,9 +524,10 @@ pub async fn count(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<RowCount> 
 }
 
 pub async fn query(p: &RemoteProfile, r: &QueryRequest) -> AppResult<QueryResult> {
+    let started = Instant::now();
     let mut conn = open(p).await?;
     let tables = if let Some((schema, name)) = policy::mysql_relation(&r.sql)? {
-        vec![approved_table(&mut conn, &schema, &name).await?]
+        vec![approved_table(p, &mut conn, &schema, &name).await?]
     } else {
         vec![]
     };
@@ -465,16 +537,42 @@ pub async fn query(p: &RemoteProfile, r: &QueryRequest) -> AppResult<QueryResult
     } else {
         approved.sql().into()
     };
-    read(&mut conn, sql, vec![], MAX_ROWS).await
+    let validation_ms = (started.elapsed().as_millis() as u64).saturating_sub(conn.connection_ms);
+    let result = read(&mut conn, sql, vec![], MAX_ROWS, false).await?;
+    Ok(finish_read(p, conn, result, started, validation_ms))
+}
+
+fn finish_read(
+    p: &RemoteProfile,
+    conn: Database,
+    mut result: QueryResult,
+    started: Instant,
+    validation_ms: u64,
+) -> QueryResult {
+    let mut timings = QueryTimings {
+        connection_ms: conn.connection_ms,
+        connection_reused: conn.reused,
+        validation_ms,
+        execution_ms: result.elapsed_ms,
+        cleanup_ms: 0,
+    };
+    let cleanup = Instant::now();
+    recycle(p, conn);
+    timings.cleanup_ms = cleanup.elapsed().as_millis() as u64;
+    result.elapsed_ms = started.elapsed().as_millis() as u64;
+    result.timings = Some(timings);
+    result
 }
 
 async fn read(
-    conn: &mut Conn,
+    conn: &mut Database,
     sql: String,
     params: Vec<Value>,
     limit: usize,
+    bounded_page: bool,
 ) -> AppResult<QueryResult> {
     let started = Instant::now();
+    conn.reusable = false;
     let mut result = conn
         .exec_iter(&sql, Params::Positional(params))
         .await
@@ -490,6 +588,11 @@ async fn read(
     while let Some(row) = result.next().await.map_err(db_error)? {
         if rows.len() >= limit {
             truncated = true;
+            // The application-generated page has LIMIT page_size + 1. Consume
+            // its terminator after the extra row, not an unbounded SQL result.
+            if bounded_page {
+                let _ = result.next().await.map_err(db_error)?;
+            }
             break;
         }
         let values: Vec<Option<String>> = row.unwrap().into_iter().map(text_value).collect();
@@ -500,7 +603,9 @@ async fn read(
         }
         rows.push(values);
     }
-    // Dropping the dedicated connection avoids draining arbitrarily large results.
+    let complete = result.is_empty();
+    drop(result);
+    conn.reusable = complete;
     Ok(QueryResult {
         columns,
         rows,
@@ -538,7 +643,7 @@ pub async fn indexes(
 ) -> AppResult<Vec<IndexInfo>> {
     let mut conn = open(p).await?;
     let schema = selected_database(p, schema)?;
-    if !catalog(&mut conn, schema, Some(table))
+    if !checked_catalog(p, &mut conn, schema, Some(table))
         .await?
         .iter()
         .any(|t| t.name == table)
@@ -567,6 +672,7 @@ pub async fn indexes(
             });
         }
     }
+    recycle(p, conn);
     Ok(indexes)
 }
 
@@ -588,6 +694,7 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
             .cloned()
             .unwrap_or_else(|| "Not reported".into())
     };
+    recycle(p, conn);
     Ok(Overview {
         database: if p.database.is_empty() {
             "Accessible databases".into()
@@ -610,10 +717,8 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    #[ignore = "requires local Compose MySQL fixture"]
-    async fn privileged_mysql_connection_is_server_read_only() {
-        let profile = RemoteProfile::new(ConnectRequest {
+    fn fixture_profile() -> RemoteProfile {
+        RemoteProfile::new(ConnectRequest {
             engine: Engine::Mysql,
             name: "Disposable fixture".into(),
             host: "127.0.0.1".into(),
@@ -626,7 +731,26 @@ mod tests {
             root_ca_pem: String::new(),
             manual_edits: false,
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    async fn fixture_admin() -> Conn {
+        Conn::new(
+            OptsBuilder::default()
+                .ip_or_hostname("127.0.0.1")
+                .tcp_port(13306)
+                .prefer_socket(false)
+                .user(Some("root"))
+                .pass(Some("local-mysql-admin")),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn privileged_mysql_connection_is_server_read_only() {
+        let profile = fixture_profile();
         let mut conn = open(&profile).await.unwrap();
         let error = conn
             .query_drop("UPDATE tablepor_test.items SET label='must not write' WHERE id=1")
@@ -638,6 +762,269 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(label.as_deref(), Some("First"));
+        // The protection must persist across implicit transactions and reuse.
+        let id = conn.id();
+        recycle(&profile, conn);
+        let mut conn = open(&profile).await.unwrap();
+        assert!(conn.reused);
+        assert_eq!(conn.id(), id);
+        let settings: (u8, u8) = conn
+            .query_first("SELECT @@session.transaction_read_only, @@session.autocommit")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(settings, (1, 1));
+        let error = conn
+            .query_drop("UPDATE tablepor_test.items SET label='must not write' WHERE id=1")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, mysql_async::Error::Server(e) if e.code == 1792));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn reused_reads_observe_new_commits_without_holding_transaction_or_metadata_locks() {
+        let profile = fixture_profile();
+        let mut admin = fixture_admin().await;
+        let table = format!("tablepor_test.reuse_{}", uuid::Uuid::new_v4().simple());
+        admin
+            .query_drop(format!("CREATE TABLE {table} (id INT PRIMARY KEY)"))
+            .await
+            .unwrap();
+        admin
+            .query_drop(format!("INSERT INTO {table} VALUES (1)"))
+            .await
+            .unwrap();
+        let mut conn = open(&profile).await.unwrap();
+        let id = conn.id();
+        let first = read(
+            &mut conn,
+            format!("SELECT id FROM {table}"),
+            vec![],
+            MAX_ROWS,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.rows[0][0].as_deref(), Some("1"));
+        recycle(&profile, conn);
+        admin
+            .query_drop(format!("UPDATE {table} SET id=2"))
+            .await
+            .unwrap();
+        let mut conn = open(&profile).await.unwrap();
+        assert_eq!(conn.id(), id);
+        let second = read(
+            &mut conn,
+            format!("SELECT id FROM {table}"),
+            vec![],
+            MAX_ROWS,
+            false,
+        )
+        .await
+        .unwrap();
+        recycle(&profile, conn);
+        // A retained explicit transaction would hold a metadata lock and block DDL.
+        admin
+            .query_drop("SET SESSION lock_wait_timeout=1")
+            .await
+            .unwrap();
+        let dropped = admin.query_drop(format!("DROP TABLE {table}")).await;
+        drop(profile); // Always release the test session, including on failure.
+        if dropped.is_err() {
+            admin
+                .query_drop(format!("DROP TABLE {table}"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(second.rows[0][0].as_deref(), Some("2"));
+        assert!(
+            dropped.is_ok(),
+            "idle transport held a transaction/metadata lock"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn completed_pages_reuse_but_unbounded_and_byte_truncations_close() {
+        let profile = fixture_profile();
+        let mut conn = open(&profile).await.unwrap();
+        let original = conn.id();
+        let result = read(
+            &mut conn,
+            "SELECT id FROM tablepor_test.items ORDER BY id LIMIT 2".into(),
+            vec![],
+            1,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(result.truncated && conn.reusable);
+        recycle(&profile, conn);
+        let mut conn = open(&profile).await.unwrap();
+        assert_eq!(conn.id(), original);
+        let result = read(
+            &mut conn,
+            "SELECT id FROM tablepor_test.items ORDER BY id".into(),
+            vec![],
+            1,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(result.truncated && !conn.reusable);
+        recycle(&profile, conn);
+        let mut conn = open(&profile).await.unwrap();
+        assert_ne!(conn.id(), original);
+        assert!(!conn.reused);
+        let result = read(
+            &mut conn,
+            "SELECT REPEAT('x', 2100000) UNION ALL SELECT REPEAT('x', 2100000)".into(),
+            vec![],
+            MAX_ROWS,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(result.truncated && !conn.reusable);
+        recycle(&profile, conn);
+        assert!(profile.mysql_idle.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn killed_cached_socket_recovers_before_catalog_without_replaying_user_sql() {
+        let profile = fixture_profile();
+        let conn = open(&profile).await.unwrap();
+        let killed = conn.id();
+        recycle(&profile, conn);
+        let mut admin = fixture_admin().await;
+        admin
+            .query_drop(format!("KILL CONNECTION {killed}"))
+            .await
+            .unwrap();
+        let mut conn = open(&profile).await.unwrap();
+        let tables = checked_catalog(&profile, &mut conn, "tablepor_test", Some("items"))
+            .await
+            .unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_ne!(conn.id(), killed);
+        assert!(!conn.reused);
+        let expired = conn.id();
+        recycle(&profile, conn);
+        {
+            let mut idle = profile.mysql_idle.lock().unwrap();
+            idle.as_mut().unwrap().idle_since = Instant::now() - Duration::from_secs(31);
+        }
+        admin
+            .query_drop(format!("KILL CONNECTION {expired}"))
+            .await
+            .unwrap();
+        let conn = open(&profile).await.unwrap();
+        assert_ne!(conn.id(), expired);
+        assert!(!conn.reused);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn cached_statements_do_not_cache_permissions_or_table_metadata() {
+        let mut admin = fixture_admin().await;
+        let user = format!("reuse_{}", &uuid::Uuid::new_v4().simple().to_string()[..20]);
+        admin
+            .query_drop(format!(
+                "CREATE USER '{user}'@'%' IDENTIFIED BY 'disposable-only'"
+            ))
+            .await
+            .unwrap();
+        admin
+            .query_drop(format!(
+                "GRANT SELECT ON tablepor_test.items TO '{user}'@'%'"
+            ))
+            .await
+            .unwrap();
+        let mut profile = fixture_profile();
+        profile.username = user.clone();
+        profile.password = "disposable-only".to_string().into();
+        let request = QueryRequest {
+            connection_id: String::new(),
+            request_id: String::new(),
+            schema: None,
+            sql: "SELECT id FROM tablepor_test.items LIMIT 2".into(),
+            explain: false,
+        };
+        assert_eq!(query(&profile, &request).await.unwrap().rows.len(), 2);
+        assert!(
+            query(&profile, &request)
+                .await
+                .unwrap()
+                .timings
+                .unwrap()
+                .connection_reused
+        );
+        admin
+            .query_drop(format!(
+                "REVOKE SELECT ON tablepor_test.items FROM '{user}'@'%'"
+            ))
+            .await
+            .unwrap();
+        let denied = query(&profile, &request).await;
+        drop(profile);
+        admin
+            .query_drop(format!("DROP USER '{user}'@'%'"))
+            .await
+            .unwrap();
+        assert!(denied.is_err_and(|e| e.code == "POLICY_DENIED" || e.code == "MYSQL_PERMISSION"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn cancelled_reads_close_transport_and_counts_do_not_change_cached_timeout() {
+        let profile = fixture_profile();
+        let conn = open(&profile).await.unwrap();
+        let id = conn.id();
+        recycle(&profile, conn);
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), async {
+            let mut conn = open(&profile).await.unwrap();
+            // Internal test only: user SQL policy never permits SLEEP().
+            let result = read(&mut conn, "SELECT SLEEP(2)".into(), vec![], MAX_ROWS, false)
+                .await
+                .unwrap();
+            recycle(&profile, conn);
+            result
+        })
+        .await;
+        assert!(cancelled.is_err());
+        assert!(profile.mysql_idle.lock().unwrap().is_none());
+        let conn = open(&profile).await.unwrap();
+        assert_ne!(conn.id(), id);
+        let fresh = conn.id();
+        recycle(&profile, conn);
+        let counted = count(
+            &profile,
+            &BrowseRequest {
+                connection_id: String::new(),
+                request_id: String::new(),
+                schema: Some("tablepor_test".into()),
+                table: "items".into(),
+                filters: vec![],
+                filter_match: FilterMatch::All,
+                sort_column: None,
+                descending: false,
+                page: 0,
+                page_size: 100,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(counted.rows, "2");
+        let mut conn = open(&profile).await.unwrap();
+        assert_eq!(conn.id(), fresh);
+        assert_eq!(
+            conn.query_first::<u64, _>("SELECT @@session.max_execution_time")
+                .await
+                .unwrap(),
+            Some(10000)
+        );
     }
     #[test]
     fn server_errors_identify_the_check_and_redact_server_details() {

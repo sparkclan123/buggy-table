@@ -11,8 +11,9 @@ use crate::{
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-// Serialize profile changes with tunnel startup so edits cannot race a launch.
-pub(crate) static CHANGES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+// Independent launches may overlap. Profile changes wait for every launch to
+// finish so edits/removal cannot race the secrets snapshot or session insertion.
+pub(crate) static CHANGES: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 async fn storage<T: Send + 'static>(
     app: AppHandle,
@@ -37,7 +38,7 @@ pub(crate) async fn connect_network(
             .connect_route(request, None, replacing, Some(owner.to_string()))
             .await;
     }
-    let _lock = CHANGES.lock().await;
+    let _lock = CHANGES.read().await;
     let profile_id = selection
         .profile_id
         .clone()
@@ -66,7 +67,7 @@ pub async fn discard_vpn_draft(
     state: State<'_, Workbench>,
     owner: String,
 ) -> AppResult<()> {
-    let _lock = CHANGES.lock().await;
+    let _lock = CHANGES.write().await;
     if state.vpn_owner_in_use(&owner).await {
         return Ok(());
     }
@@ -85,7 +86,7 @@ pub async fn save_vpn_profile(
     state: State<'_, Workbench>,
     edit: VpnEdit,
 ) -> AppResult<VpnProfile> {
-    let _lock = CHANGES.lock().await;
+    let _lock = CHANGES.write().await;
     if let Some(id) = &edit.id
         && state.vpn_profile_in_use(id).await
     {
@@ -103,7 +104,7 @@ pub async fn remove_vpn_profile(
     owner: String,
     id: String,
 ) -> AppResult<Option<SavedConnection>> {
-    let _lock = CHANGES.lock().await;
+    let _lock = CHANGES.write().await;
     if state.vpn_profile_in_use(&id).await {
         return Err(failure(
             "VPN_IN_USE",

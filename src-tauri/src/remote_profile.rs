@@ -14,6 +14,7 @@ pub struct RemoteProfile {
     pub tls: TlsMode,
     pub root_ca_pem: String,
     pub(crate) endpoint: Option<std::net::SocketAddr>,
+    pub(crate) mysql_idle: std::sync::Mutex<Option<crate::mysql::Database>>,
 }
 
 impl RemoteProfile {
@@ -87,6 +88,7 @@ impl RemoteProfile {
             tls: r.tls,
             root_ca_pem: r.root_ca_pem,
             endpoint: None,
+            mysql_idle: std::sync::Mutex::new(None),
         })
     }
 

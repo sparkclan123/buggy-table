@@ -189,7 +189,7 @@ pub async fn update_connection(
 
 #[tauri::command]
 pub async fn remove_connection(app: AppHandle, id: String) -> AppResult<()> {
-    let _changes = crate::vpn_commands::CHANGES.lock().await;
+    let _changes = crate::vpn_commands::CHANGES.write().await;
     if app.state::<Workbench>().vpn_owner_in_use(&id).await {
         return Err(AppError::new(
             "CONNECTION_IN_USE",

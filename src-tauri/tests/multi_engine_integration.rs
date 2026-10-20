@@ -86,6 +86,7 @@ async fn mysql_reads_metadata_filters_sort_and_exact_decimals() {
     );
     assert!(info.tables[0].columns.iter().all(|c| !c.editable));
     let result = app.browse(browse(&info.id)).await.unwrap();
+    assert!(result.timings.as_ref().unwrap().connection_reused);
     assert_eq!(result.rows.len(), 2);
     assert_eq!(app.count(browse(&info.id)).await.unwrap().rows, "2");
     assert_eq!(result.rows[0][0].as_deref(), Some("2"));
@@ -350,6 +351,7 @@ async fn mysql_server_connection_selects_databases_per_operation_without_reconne
         let mut b = browse(&info.id);
         b.schema = Some(schema.into());
         let result = app.browse(b).await.unwrap();
+        assert!(result.timings.as_ref().unwrap().connection_reused);
         assert_eq!(result.rows[0][0].as_deref(), Some(expected));
         let mut b = browse(&info.id);
         b.schema = Some(schema.into());
