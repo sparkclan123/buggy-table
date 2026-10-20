@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  vpn-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: python3 scripts/vpn-fixtures.py start
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features vpn-integration --test vpn_integration -- --ignored --nocapture
+      - if: always()
+        run: python3 scripts/vpn-fixtures.py stop
+
   postgres-compatibility:
     runs-on: ubuntu-latest
     strategy:

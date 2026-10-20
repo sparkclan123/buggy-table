@@ -1,18 +1,24 @@
-buggy-table 0.1.10 — Preview
+buggy-table 0.1.11 — Preview
 
-Faster keyboard workflows for table edits, more room for long values, and an explicit MySQL TLS compatibility option.
+Use a separate OpenVPN connection for each database, with saved profiles, network health checks and reconnect controls.
 
 ## Changes
 
-- Use the mouse wheel to scroll an overflowing table-tab strip horizontally. Horizontal trackpad scrolling and tab dragging continue to work.
-- Cmd/Ctrl+Z undoes unsaved cell edits, staged deletions and copied rows. Shift+Cmd/Ctrl+Z redoes them. History belongs to each table tab and clears after Save, Discard or reloading data.
-- Select rows, press Cmd/Ctrl+C, then Cmd/Ctrl+V in the same table to append copies below the current page. They remain yellow drafts until Save. PostgreSQL requires a supported table with a primary key, a manual-edit session and INSERT permission. Database-generated keys and generated columns are omitted; fill Required primary-key cells before saving. MySQL and Redis remain read-only.
-- PostgreSQL typed saves now support INSERT alongside UPDATE/DELETE in one transaction, using bound values and fresh permissions. Defaults, NULL, exact decimal/JSON text and generated columns are preserved. A failed save rolls back the whole batch; the existing 100-row, 500-cell and 4 MiB limits apply.
-- Long cell values open in a wider multiline editor with a thin scrollbar. Enter finishes editing, Shift+Enter adds a newline, and Escape restores the previous value.
-- Cmd/Ctrl+Enter runs the current SQL instead of invoking CodeMirror's default blank-line command.
-- MySQL now offers **TLS · encrypted, certificate not verified** for explicitly chosen compatibility with self-signed/untrusted or hostname-mismatched certificates. Verified TLS remains the default and supports private CA PEM files. Compatibility mode still requires encryption and never falls back to plaintext, but does not authenticate the server's identity. Client-certificate authentication is not supported.
+- Compact VPN switch and settings beside each database connection, including the new-connection form and connection manager.
+- Import inline `.ovpn` client profiles, add/remove/rename them, and choose a default independently for each database. The enabled/default preference is saved with the local connection bookmark.
+- When enabled, connect OpenVPN before connecting the database. Each active database owns an isolated Linux container, so different VPNs can use overlapping private hostnames and IP ranges without replacing the computer's routes or DNS.
+- Show VPN state and the last route check. **Test route** checks private DNS/TCP reachability to the database port and reports latency; it does not run SQL or prove database authentication. **Reconnect** refreshes that database's VPN and database session.
+- Reuse the running VPN for subsequent queries. Status polling reads local state without issuing extra SQL. A failed VPN never falls back to the device network. Direct connections do not require Docker.
+- Keep database TLS verification against the original database hostname. Encrypt VPN configuration/private keys/passwords locally using a key in the system credential store. Stored VPN secrets are not sent back to the UI.
+- Preserve the existing workspace if network replacement fails, and require saving/discarding pending edits before a network change or reconnect. VPN servers may independently restrict concurrent use of the same client certificate.
 
-Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATION.md](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.10/docs/VALIDATION.md). Browser database cases use IPC doubles; adapter tests use disposable database fixtures. The user's external MySQL server has not been independently verified.
+## VPN requirements and limits
+
+Install and start **Docker Desktop with Linux containers** and use a local Docker context. First use downloads/builds the runtime and may take several minutes; Prepare in VPN settings can do this in advance. Later sessions reuse the image. No Docker installation is needed for connections with VPN disabled.
+
+Supported: OpenVPN TUN profiles with inline CA/certificates/keys, username/password authentication and encrypted private-key passwords. Use the database's private hostname/IP; add VPN DNS IPs if the server does not supply them. TAP, external certificate/key files, `<connection>` blocks, user scripts/plugins, browser SSO and interactive MFA/challenges are not supported. Disconnect before editing/removing a profile currently in use. See the [connection guide](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.11/docs/CONNECTIONS.md).
+
+Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATION.md](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.11/docs/VALIDATION.md). Browser cases use IPC doubles; real isolated OpenVPN/PostgreSQL fixtures verify separate networks, private DNS, TLS identity and failure isolation. External user VPN profiles and native Windows VPN operation have not been independently verified. MySQL and Redis retain their existing read-only policies.
 
 ## Install or replace an older preview
 
@@ -20,9 +26,9 @@ Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATI
 
 | Platform | Installer |
 |---|---|
-| Mac Apple Silicon (M series) | `buggy-table_0.1.10_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.10_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.10_x64-setup.exe` |
+| Mac Apple Silicon (M series) | `buggy-table_0.1.11_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.11_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.11_x64-setup.exe` |
 
 On Mac, open the DMG and drag buggy-table into Applications, replacing the old app. On Windows, run the installer using the existing installation location. Checksums are provided in SHA256SUMS.txt; build provenance is in BUILD_INFO.txt.
 

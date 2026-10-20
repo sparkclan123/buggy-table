@@ -38,6 +38,8 @@ pub struct SavedConnection {
     pub last_used: u64,
     pub has_password: bool,
     pub layout: ProfileLayout,
+    #[serde(default)]
+    pub vpn: crate::vpn::VpnSelection,
 }
 
 impl SavedConnection {
@@ -58,6 +60,7 @@ impl SavedConnection {
             pinned: false,
             last_used: now(),
             has_password: false,
+            vpn: crate::vpn::VpnSelection::default(),
             layout: ProfileLayout {
                 selected_schema: request.schema.clone(),
                 ..Default::default()
@@ -82,6 +85,7 @@ impl SavedConnection {
     }
 
     fn validate(&self) -> AppResult<()> {
+        self.vpn.validate()?;
         if Uuid::parse_str(&self.id).is_err()
             || self.port == 0
             || self.group.len() > 100
@@ -262,6 +266,18 @@ impl Profiles {
         profiles.retain(|p| p.id != id);
         self.write(profiles)
     }
+    pub fn set_vpn(&self, id: &str, vpn: crate::vpn::VpnSelection) -> AppResult<SavedConnection> {
+        vpn.validate()?;
+        let _lock = self.lock.lock().map_err(|_| storage_error())?;
+        let mut profiles = self.read()?;
+        let saved = profiles.iter_mut().find(|p| p.id == id).ok_or_else(|| {
+            AppError::new("PROFILE_NOT_FOUND", "Saved connection no longer exists.")
+        })?;
+        saved.vpn = vpn;
+        let result = saved.clone();
+        self.write(profiles)?;
+        Ok(result)
+    }
 }
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -278,6 +294,10 @@ fn storage_error() -> AppError {
 
 #[cfg(feature = "desktop")]
 pub fn credential(id: &str) -> AppResult<keyring_core::Entry> {
+    credential_for("dev.tablepor.desktop.connections", id)
+}
+#[cfg(feature = "desktop")]
+pub fn credential_for(service: &str, id: &str) -> AppResult<keyring_core::Entry> {
     if Uuid::parse_str(id).is_err() {
         return Err(AppError::new("INVALID_PROFILE", "Invalid connection ID."));
     }
@@ -287,9 +307,7 @@ pub fn credential(id: &str) -> AppResult<keyring_core::Entry> {
         // File-based login Keychain, not the iCloud/protected-data store.
         let store =
             apple_native_keyring_store::keychain::Store::new().map_err(|_| vault_error())?;
-        store
-            .build("dev.tablepor.desktop.connections", id, None)
-            .map_err(|_| vault_error())
+        store.build(service, id, None).map_err(|_| vault_error())
     }
     #[cfg(target_os = "windows")]
     {
@@ -297,7 +315,7 @@ pub fn credential(id: &str) -> AppResult<keyring_core::Entry> {
         let store = windows_native_keyring_store::Store::new().map_err(|_| vault_error())?;
         let modifiers = std::collections::HashMap::from([("persistence", "Local")]);
         store
-            .build("dev.tablepor.desktop.connections", id, Some(&modifiers))
+            .build(service, id, Some(&modifiers))
             .map_err(|_| vault_error())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -370,6 +388,37 @@ mod tests {
         }
         restarted.remove(&p.id).unwrap();
         assert!(restarted.list().unwrap().is_empty());
+    }
+    #[test]
+    fn legacy_bookmarks_default_to_device_network_and_remember_vpn_choice() {
+        let mut json = serde_json::to_value(fixture()).unwrap();
+        json.as_object_mut().unwrap().remove("vpn");
+        let legacy: SavedConnection = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy.vpn, crate::vpn::VpnSelection::default());
+        let dir = tempfile::tempdir().unwrap();
+        let store = Profiles::new(dir.path().into());
+        let saved = store.put(legacy).unwrap();
+        let selection = crate::vpn::VpnSelection {
+            enabled: true,
+            profile_id: Some(Uuid::new_v4().to_string()),
+        };
+        store.set_vpn(&saved.id, selection.clone()).unwrap();
+        assert_eq!(
+            Profiles::new(dir.path().into()).get(&saved.id).unwrap().vpn,
+            selection
+        );
+        assert!(
+            store
+                .set_vpn(
+                    &saved.id,
+                    crate::vpn::VpnSelection {
+                        enabled: true,
+                        profile_id: None,
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(store.get(&saved.id).unwrap().vpn, selection);
     }
     #[test]
     fn invalid_files_are_not_overwritten() {

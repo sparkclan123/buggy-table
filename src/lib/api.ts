@@ -15,6 +15,12 @@ import type {
   IndexInfo,
   Overview,
   QueryResult,
+  VpnSelection,
+  VpnProfile,
+  VpnEdit,
+  VpnStatus,
+  VpnRuntimeInfo,
+  ChangedNetwork,
 } from './types';
 
 export const desktopAvailable = isTauri();
@@ -37,8 +43,27 @@ export const api = {
     group: string,
     remember: boolean,
     savePassword: boolean,
+    vpn?: VpnSelection,
   ) =>
-    call<ConnectedProfile>('connect_profile', { request, savedId, group, remember, savePassword }),
+    call<ConnectedProfile>('connect_profile', {
+      request,
+      savedId,
+      group,
+      remember,
+      savePassword,
+      vpn,
+    }),
+  vpnProfiles: (owner: string) => call<VpnProfile[]>('vpn_profiles', { owner }),
+  discardVpnDraft: (owner: string) => call<void>('discard_vpn_draft', { owner }),
+  saveVpnProfile: (edit: VpnEdit) => call<VpnProfile>('save_vpn_profile', { edit }),
+  removeVpnProfile: (owner: string, id: string) =>
+    call<SavedConnection | null>('remove_vpn_profile', { owner, id }),
+  vpnRuntime: () => call<VpnRuntimeInfo>('vpn_runtime', {}),
+  prepareVpn: () => call<void>('prepare_vpn', {}),
+  vpnStatus: (connectionId: string, probe = false) =>
+    call<VpnStatus>('vpn_status', { connectionId, probe }),
+  setConnectionVpn: (owner: string, selection: VpnSelection, connectionId: string | null) =>
+    call<ChangedNetwork>('set_connection_vpn', { owner, selection, connectionId }),
   reconnect: (id: string) => call<ConnectedProfile>('reconnect_profile', { id }),
   updateConnection: (id: string, layout: ProfileLayout, pinned: boolean, group: string) =>
     call<void>('update_connection', { id, layout, pinned, group }),

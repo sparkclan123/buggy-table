@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-vpn-profile"
+description = "Enables the remove_vpn_profile command without any pre-configured scope."
+commands.allow = ["remove_vpn_profile"]
+
+[[permission]]
+identifier = "deny-remove-vpn-profile"
+description = "Denies the remove_vpn_profile command without any pre-configured scope."
+commands.deny = ["remove_vpn_profile"]

@@ -35,9 +35,11 @@ async fn open(p: &RemoteProfile) -> AppResult<Database> {
         settings = settings.set_password(p.password.as_str());
     }
     let connect = async {
-        let tcp = tokio::net::TcpStream::connect((p.host.as_str(), p.port))
-            .await
-            .map_err(|_| AppError::new("REDIS_CONNECTION", "Cannot reach the Redis endpoint."))?;
+        let tcp = match p.endpoint {
+            Some(endpoint) => tokio::net::TcpStream::connect(endpoint).await,
+            None => tokio::net::TcpStream::connect((p.host.as_str(), p.port)).await,
+        }
+        .map_err(|_| AppError::new("REDIS_CONNECTION", "Cannot reach the Redis endpoint."))?;
         let stream: Box<dyn crate::bounded_stream::Transport> = match p.tls {
             TlsMode::Require => return Err(AppError::policy("Redis requires verified TLS.")),
             TlsMode::LocalOnly => Box::new(tcp),

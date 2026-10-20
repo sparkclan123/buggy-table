@@ -44,3 +44,26 @@ MySQL ที่ขึ้น “TLS verification failed” ให้ตรวจ 
 ไฟล์ local ไม่ถูกส่งโดยแอปไป cloud แต่การสำรองข้อมูลของระบบปฏิบัติการหรือซอฟต์แวร์อื่นอยู่นอกการควบคุมของแอป รหัสผ่านที่ไม่ได้เลือกเก็บใช้เฉพาะ session และไม่ถูกส่งกลับมายัง frontend เมื่อ Reconnect
 
 ตั้งแต่ 0.1.4 ตัวปรับธีมอยู่ที่ไอคอนข้างชื่อแอป/เลขเวอร์ชันด้านล่าง เลือก System, Light หรือ Dark ได้เหมือนเดิม
+
+## OpenVPN แยกต่อฐานข้อมูล
+
+ต้องติดตั้งและเปิด **Docker Desktop ในโหมด Linux containers** ใช้ Docker context ในเครื่อง รองรับ Mac/Windows; connection ที่ปิด VPN ไม่ต้องใช้ Docker
+
+1. กดรูปตั้งค่าข้างสวิตช์ **VPN** ใน connection หรือในฟอร์มต่อฐานข้อมูล
+2. กด **Add VPN** เลือกไฟล์ `.ovpn` แบบ inline (CA/certificate/key อยู่ในไฟล์เดียว) ตั้งชื่อ และกรอก VPN username/password หากเซิร์ฟเวอร์ต้องใช้ เพิ่มได้หลายโปรไฟล์ต่อ connection
+3. เลือก radio ของโปรไฟล์เพื่อกำหนด default เปิด **Use VPN for this database** แล้ว Apply การตั้งค่าจะจำคู่กับ bookmark บนเครื่องนี้ เปิดแอปใหม่ยังไม่เชื่อมอัตโนมัติ; เมื่อกด Reconnect จะต่อ VPN ก่อนตรวจสิทธิ์ฐานข้อมูล
+4. ใส่ Host ของฐานข้อมูลเป็น **ชื่อหรือ IP ภายใน VPN** ไม่ใช่ localhost หาก VPN ไม่ส่ง DNS มา ให้ใส่ private DNS IP ใน Advanced หรือใช้ IP ของฐานข้อมูล
+
+ครั้งแรกแอปเตรียม OpenVPN runtime โดยดาวน์โหลดและ build Docker image อาจใช้เวลาหลายนาที สามารถกด **Prepare** ล่วงหน้าใน VPN settings ได้ หลังจากนั้นใช้ image เดิมและคง tunnel ไว้ตลอด session ไม่ handshake VPN ทุก query เมื่อ Disconnect จะหยุด container ของ connection นั้น
+
+สวิตช์ปิดใช้เครือข่ายปกติของเครื่อง เปิดใช้ VPN ของ connection นั้น แต่ละ tunnel แยก routing/DNS จึงใช้ฐานข้อมูลคนละ VPN ที่มี private IP หรือชื่อซ้ำกันได้ การต่อ VPN ไม่เปลี่ยนโหมด TLS ของฐานข้อมูล: verified TLS ยังคงตรวจชื่อ Host เดิม ส่วน private CA ของ DB ต้องตั้งแยกจาก CA ใน `.ovpn`
+
+**สถานะและ refresh:** จุดสถานะแสดง tunnel ready / disconnected / destination unreachable ใน VPN settings มีผลตรวจและเวลาล่าสุด **Test route** ตรวจ DNS/TCP ไปยังพอร์ตฐานข้อมูลผ่าน VPN และแสดง latency ไม่รัน SQL และไม่ได้ยืนยันว่า login/query จะผ่าน การอ่านสถานะอัตโนมัติทุก 15 วินาทีไม่ส่ง query หรือ health probe เพิ่ม การตรวจสายขาดของ OpenVPN อาจใช้เวลาประมาณ 40 วินาที ก่อน UI รอบถัดไปแสดงผล กด **Reconnect** หรือไอคอน refresh ข้าง VPN เพื่อต่อทั้ง VPN และฐานข้อมูลของ connection นั้นใหม่
+
+ต้อง Save/Discard งานแก้ค้างก่อนเปลี่ยน network หรือ Reconnect แอปตรวจ connection ใหม่ก่อนแทน session เดิม หากล้มเหลวจะไม่ล้าง workspace เดิม VPN ที่หลุด **ไม่ fallback** ไปเครือข่ายหลัก การใช้งานใบรับรอง client เดียวพร้อมกันหลาย connection รวมถึงช่วง refresh ขึ้นกับข้อจำกัดของ VPN server; บาง server ตัด session เก่าเมื่อ client เดียวกันต่อใหม่ ให้ใช้ credential ที่อนุญาต concurrent sessions หรือแยก client certificates
+
+เพิ่ม/แก้ชื่อ/ลบโปรไฟล์ได้ใน settings ต้อง Disconnect ก่อนแก้หรือลบโปรไฟล์ที่กำลังใช้งาน การลบ default จะปิด VPN preference ของ connection นั้นด้วย การลบ bookmark ลบโปรไฟล์ VPN ที่เป็นเจ้าของด้วย; การปิดฟอร์ม connection ใหม่ที่ยังไม่ได้เชื่อมจะล้าง draft profiles ที่สร้างในฟอร์มนั้น
+
+ไฟล์ `.ovpn`, private keys และ VPN passwords เก็บแบบ AES-256-GCM ใน `vpn-profiles.json` โดยกุญแจอยู่ใน macOS login Keychain / Windows Credential Manager (Local) ชื่อโปรไฟล์/username/DNS/ความสัมพันธ์กับ connection เป็น metadata ที่ไม่ได้เข้ารหัส ไม่เก็บ secrets ใน browser storage, Docker environment/arguments/image layers/logs และไม่ส่ง secret เดิมกลับมาให้ UI ช่อง password ว่างตอนแก้หมายถึงเก็บค่าเดิม; เลือก Clear เพื่อล้างรหัสผ่านที่บันทึกไว้
+
+ขอบเขตรุ่นนี้: OpenVPN TUN, inline client profile ไม่เกิน 512 KiB และ 50 โปรไฟล์รวม รองรับ username/password และ encrypted private key password ไม่รองรับ TAP, `<connection>` blocks, external certificate/key files, user scripts/plugins, browser SSO หรือ interactive MFA/challenge หากไฟล์มี option ที่ยังไม่รองรับ แอปแจ้งชื่อ option แทนการละเลยเงียบ ๆ การยืนยันกับ VPN ภายนอกแต่ละผู้ให้บริการยังต้องทดสอบกับโปรไฟล์จริงของผู้ใช้

@@ -29,6 +29,14 @@
     "allow-update-connection",
     "allow-remove-connection",
     "allow-list-schemas",
-    "allow-schema-tables"
+    "allow-schema-tables",
+    "allow-vpn-profiles",
+    "allow-discard-vpn-draft",
+    "allow-save-vpn-profile",
+    "allow-remove-vpn-profile",
+    "allow-vpn-runtime",
+    "allow-prepare-vpn",
+    "allow-vpn-status",
+    "allow-set-connection-vpn"
   ]
 }

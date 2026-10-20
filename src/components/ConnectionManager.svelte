@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Plus, X, Star, PlugZap, Search, Settings2, Trash2 } from '@lucide/svelte';
   import { engineLabel, hasEdits, type ConnectionWorkspace } from '../lib/connections';
+  import VpnControls from './VpnControls.svelte';
   let {
     entries,
     activeKey,
@@ -13,6 +14,8 @@
     onpin,
     onremove,
     onclose,
+    onvpn,
+    ontogglevpn,
   }: {
     entries: ConnectionWorkspace[];
     activeKey: string;
@@ -24,6 +27,8 @@
     onpin: (entry: ConnectionWorkspace) => void;
     onremove: (entry: ConnectionWorkspace) => void;
     onclose: () => void;
+    onvpn: (entry: ConnectionWorkspace) => void;
+    ontogglevpn: (entry: ConnectionWorkspace) => void;
   } = $props();
   let search = $state('');
   let engine = $state('');
@@ -118,6 +123,14 @@
           >
           <small>{entry.online ? 'Ready' : 'Disconnected'}</small>
         </button>
+        <VpnControls
+          label={entry.info.name}
+          enabled={(entry.saved?.vpn ?? entry.info.vpn)?.enabled ?? false}
+          status={entry.vpnStatus}
+          disabled={busy}
+          onsettings={() => onvpn(entry)}
+          ontoggle={() => ontogglevpn(entry)}
+        />
         {#if !entry.online}<button
             class="icon-button"
             aria-label={`Reconnect ${entry.info.name}`}

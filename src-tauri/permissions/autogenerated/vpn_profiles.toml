@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-profiles"
+description = "Enables the vpn_profiles command without any pre-configured scope."
+commands.allow = ["vpn_profiles"]
+
+[[permission]]
+identifier = "deny-vpn-profiles"
+description = "Denies the vpn_profiles command without any pre-configured scope."
+commands.deny = ["vpn_profiles"]

@@ -10,9 +10,9 @@ use zeroize::Zeroizing;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectedProfile {
-    connection: ConnectionInfo,
-    profile: Option<SavedConnection>,
-    warning: Option<String>,
+    pub(crate) connection: ConnectionInfo,
+    pub(crate) profile: Option<SavedConnection>,
+    pub(crate) warning: Option<String>,
 }
 
 async fn storage<T: Send + 'static>(
@@ -37,20 +37,32 @@ pub async fn list_connections(app: AppHandle) -> AppResult<Vec<SavedConnection>>
 #[tauri::command]
 pub async fn connect_profile(
     app: AppHandle,
-    state: State<'_, Workbench>,
     request: ConnectRequest,
     saved_id: Option<String>,
     group: String,
     remember: bool,
     save_password: bool,
+    vpn: Option<crate::vpn::VpnSelection>,
 ) -> AppResult<ConnectedProfile> {
-    if let Some(ref id) = saved_id {
-        let id = id.clone();
-        storage(app.clone(), move |store| store.get(&id)).await?;
+    let state = app.state::<Workbench>();
+    let id = saved_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if uuid::Uuid::parse_str(&id).is_err() {
+        return Err(AppError::new("INVALID_PROFILE", "Invalid connection ID."));
     }
+    let old_id = id.clone();
+    let old = storage(app.clone(), move |store| match store.get(&old_id) {
+        Ok(p) => Ok(Some(p)),
+        Err(e) if e.code == "PROFILE_NOT_FOUND" => Ok(None),
+        Err(e) => Err(e),
+    })
+    .await?;
+    let selection = vpn.unwrap_or_else(|| old.map(|p| p.vpn).unwrap_or_default());
+    selection.validate()?;
     let secret = Zeroizing::new(request.password.clone());
-    let mut profile = SavedConnection::from_request(&request, saved_id, group);
-    let connection = state.connect(request).await?;
+    let mut profile = SavedConnection::from_request(&request, Some(id.clone()), group);
+    profile.vpn = selection.clone();
+    let connection =
+        crate::vpn_commands::connect_network(&app, &state, request, &id, selection, None).await?;
     if !remember {
         return Ok(ConnectedProfile {
             connection,
@@ -135,7 +147,15 @@ pub async fn reconnect_profile(
     })
     .await?;
     // The password is sent only to the saved endpoint through the database adapter.
-    let connection = state.connect(profile.request(password.to_string())).await?;
+    let connection = crate::vpn_commands::connect_network(
+        &app,
+        &state,
+        profile.request(password.to_string()),
+        &profile.id,
+        profile.vpn.clone(),
+        None,
+    )
+    .await?;
     let mut profile = profile;
     profile.last_used = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -169,12 +189,23 @@ pub async fn update_connection(
 
 #[tauri::command]
 pub async fn remove_connection(app: AppHandle, id: String) -> AppResult<()> {
+    let _changes = crate::vpn_commands::CHANGES.lock().await;
+    if app.state::<Workbench>().vpn_owner_in_use(&id).await {
+        return Err(AppError::new(
+            "CONNECTION_IN_USE",
+            "Disconnect this database before removing it.",
+        ));
+    }
+    let vpn_app = app.clone();
     storage(app, move |store| {
         let profile = store.get(&id)?;
         let _lock = VAULT_LOCK.lock().map_err(|_| profiles::vault_error())?;
         if profile.has_password || cfg!(any(target_os = "macos", target_os = "windows")) {
             forget_secret(&id)?;
         }
+        vpn_app
+            .state::<crate::vpn::store::VpnStore>()
+            .remove_owner(&id)?;
         store.remove(&id)
     })
     .await

@@ -3,6 +3,14 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "connect",
+            "vpn_profiles",
+            "discard_vpn_draft",
+            "save_vpn_profile",
+            "remove_vpn_profile",
+            "vpn_runtime",
+            "prepare_vpn",
+            "vpn_status",
+            "set_connection_vpn",
             "list_connections",
             "connect_profile",
             "reconnect_profile",

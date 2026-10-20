@@ -2,6 +2,18 @@
 
 Reviewed on 2026-10-14. This is a code review and targeted test record, not an independent penetration test or a production certification.
 
+## Isolated OpenVPN addition — 2026-10-20
+
+Each VPN-backed session owns one local Linux container and a fixed database destination. The runtime rejects remote Docker contexts. It does not mount host directories or the Docker socket, use host networking, or change host routes/DNS. Database and private-DNS sockets bind to `tun0` and a dedicated routing table with a terminal unreachable rule. OpenVPN loss closes active forwarded streams; no direct-network retry is implemented. DNS cache lifetime is bounded by the answer TTL and is cleared on tunnel loss. Database TLS continues to authenticate the original hostname.
+
+Imported client configurations have an explicit option/block allowlist; scripts, plugins, external files, management listeners and TAP are rejected. Only the bundled up/down script runs. Container privileges are limited to NET_ADMIN/NET_RAW and `/dev/net/tun`, with a read-only root, private bounded tmpfs, no-new-privileges and CPU/memory/PID limits. These measures are not a guarantee against a malicious Docker daemon or host administrator.
+
+Config/key/password fields are AES-256-GCM encrypted with owner/profile-bound additional authenticated data. The key uses the existing local OS credential provider; it is never returned to the frontend. The encrypted file uses atomic replacement and limits. UI metadata remains plaintext. Secret input is passed through stdin into private tmpfs, not command arguments, environment, image layers or Docker logs. Stored secrets are not read back to the UI. Rust-owned secret buffers are zeroized; copies in JS, OpenVPN, Python, drivers, swap or OS backups cannot be guaranteed erased.
+
+The loopback relay accepts one fixed destination and uses a random token for the container connection. Same-user host processes and Docker itself are trusted. Session drop aborts relay/process tasks and removes only its UUID-named container. Stdin EOF and a 30-second heartbeat deadline bound orphan lifetime after app/CLI failure. Route probes are serialized and bounded; status polling reads local memory without SQL. Replacement creates and validates the new route/session before swapping; VPN servers with single-session client credentials can nevertheless invalidate the prior tunnel themselves.
+
+See CONNECTIONS.md for supported profile/authentication formats and VALIDATION.md for evidence. User-provided external VPNs, OS packet-capture egress auditing and independent security review remain outside the local fixture tests.
+
 ## Implemented controls
 
 | Area                  | Control                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

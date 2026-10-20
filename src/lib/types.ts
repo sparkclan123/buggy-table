@@ -46,6 +46,8 @@ export interface ConnectionInfo {
   manualEdits: boolean;
   serverVersion: string;
   tables: TableInfo[];
+  vpn?: VpnSelection;
+  vpnOwner?: string | null;
 }
 export interface QueryResult {
   columns: string[];
@@ -148,6 +150,49 @@ export interface SavedConnection extends Omit<ConnectRequest, 'password'> {
   lastUsed: number;
   hasPassword: boolean;
   layout: ProfileLayout;
+  vpn?: VpnSelection;
+}
+export interface VpnSelection {
+  enabled: boolean;
+  profileId: string | null;
+}
+export interface VpnProfile {
+  id: string;
+  owner: string;
+  name: string;
+  username: string;
+  dns: string[];
+  hasPassword: boolean;
+  hasKeyPassword: boolean;
+}
+export interface VpnEdit {
+  id: string | null;
+  owner: string;
+  name: string;
+  config: string | null;
+  username: string;
+  password: string | null;
+  keyPassword: string | null;
+  dns: string[];
+}
+export interface VpnStatus {
+  state: 'direct' | 'connecting' | 'ready' | 'unreachable' | 'disconnected';
+  profileId: string | null;
+  profileName: string | null;
+  connectedAt: number | null;
+  checkedAt: number | null;
+  latencyMs: number | null;
+  message: string;
+}
+export interface VpnRuntimeInfo {
+  available: boolean;
+  prepared: boolean;
+  message: string;
+}
+export interface ChangedNetwork {
+  connection: ConnectionInfo | null;
+  profile: SavedConnection | null;
+  warning: string | null;
 }
 export interface ConnectedProfile {
   connection: ConnectionInfo;

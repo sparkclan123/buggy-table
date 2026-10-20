@@ -13,6 +13,7 @@ pub struct RemoteProfile {
     pub password: Zeroizing<String>,
     pub tls: TlsMode,
     pub root_ca_pem: String,
+    pub(crate) endpoint: Option<std::net::SocketAddr>,
 }
 
 impl RemoteProfile {
@@ -78,6 +79,7 @@ impl RemoteProfile {
             password,
             tls: r.tls,
             root_ca_pem: r.root_ca_pem,
+            endpoint: None,
         })
     }
 
@@ -95,6 +97,8 @@ impl RemoteProfile {
             server_version: version,
             manual_edits: false,
             tables,
+            vpn: crate::vpn::VpnSelection::default(),
+            vpn_owner: None,
         }
     }
 }

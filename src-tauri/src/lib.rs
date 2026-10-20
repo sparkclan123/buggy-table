@@ -8,6 +8,7 @@ pub mod profiles;
 mod redis_store;
 mod remote_profile;
 pub mod service;
+pub mod vpn;
 
 #[cfg(feature = "desktop")]
 mod commands;
@@ -17,6 +18,8 @@ mod connection_commands;
 mod desktop_menu;
 #[cfg(feature = "desktop")]
 mod updates;
+#[cfg(feature = "desktop")]
+mod vpn_commands;
 
 #[cfg(feature = "desktop")]
 pub fn run() {
@@ -24,10 +27,12 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             app.manage(profiles::Profiles::new(app.path().app_local_data_dir()?));
+            app.manage(vpn::store::VpnStore::new(app.path().app_local_data_dir()?));
             desktop_menu::install(app)?;
             Ok(())
         })
         .manage(service::Workbench::default())
+        .manage(vpn::runtime::VpnRuntime::default())
         .manage(updates::Updates::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
@@ -37,6 +42,14 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             commands::connect,
+            vpn_commands::vpn_profiles,
+            vpn_commands::discard_vpn_draft,
+            vpn_commands::save_vpn_profile,
+            vpn_commands::remove_vpn_profile,
+            vpn_commands::vpn_runtime,
+            vpn_commands::prepare_vpn,
+            vpn_commands::vpn_status,
+            vpn_commands::set_connection_vpn,
             connection_commands::list_connections,
             connection_commands::connect_profile,
             connection_commands::reconnect_profile,

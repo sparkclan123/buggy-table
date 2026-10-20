@@ -31,7 +31,7 @@ impl std::fmt::Display for AppError {
 impl std::error::Error for AppError {}
 
 // Intentionally not Debug or Serialize: never return or log connection secrets.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectRequest {
     #[serde(default)]
@@ -120,6 +120,8 @@ pub struct ConnectionInfo {
     pub server_version: String,
     pub manual_edits: bool,
     pub tables: Vec<TableInfo>,
+    pub vpn: crate::vpn::VpnSelection,
+    pub vpn_owner: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

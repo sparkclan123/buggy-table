@@ -130,7 +130,8 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
         });
     let opts = OptsBuilder::default()
         .ip_or_hostname(&p.host)
-        .tcp_port(p.port)
+        .tcp_port(p.endpoint.map_or(p.port, |e| e.port()))
+        .resolved_ips(p.endpoint.map(|e| vec![e.ip()]))
         .user(Some(p.username.clone()))
         .pass(Some(p.password.to_string()))
         .db_name(Some(p.database.clone()))

@@ -8,7 +8,10 @@
     TlsMode,
     Engine,
   } from '../lib/types';
-  import { api, errorMessage } from '../lib/api';
+  import { api, desktopAvailable, errorMessage } from '../lib/api';
+  import VpnControls from './VpnControls.svelte';
+  import VpnDialog from './VpnDialog.svelte';
+  import type { VpnSelection } from '../lib/types';
   let {
     onconnected,
     onclose,
@@ -19,6 +22,11 @@
     initial?: SavedConnection | null;
   } = $props();
   let engine = $state<Engine>(untrack(() => initial?.engine ?? 'postgres'));
+  const owner = untrack(() => initial?.id ?? crypto.randomUUID());
+  let vpn = $state<VpnSelection>(
+    untrack(() => initial?.vpn ?? { enabled: false, profileId: null }),
+  );
+  let showVpn = $state(false);
   let group = $state(untrack(() => initial?.group ?? ''));
   let remember = $state(true);
   let savePassword = $state(untrack(() => initial?.hasPassword ?? false));
@@ -50,6 +58,19 @@
   let error = $state('');
   let dialog: HTMLDialogElement;
   onMount(() => dialog.showModal());
+
+  async function close() {
+    if (busy) return;
+    busy = true;
+    try {
+      if (!initial && desktopAvailable) await api.discardVpnDraft(owner);
+      onclose();
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
 
   async function readCa(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
@@ -95,13 +116,7 @@
     password = '';
     try {
       onconnected(
-        await api.connectProfile(
-          request,
-          initial?.id ?? null,
-          group,
-          remember,
-          remember && savePassword,
-        ),
+        await api.connectProfile(request, owner, group, remember, remember && savePassword, vpn),
       );
     } catch (e) {
       error = errorMessage(e);
@@ -118,23 +133,36 @@
   aria-labelledby="connection-title"
   oncancel={(event) => {
     event.preventDefault();
-    if (!busy) onclose();
+    void close();
   }}
 >
   <div class="dialog-heading">
     <div class="icon-box"><Database size={23} /></div>
-    <button
-      class="icon-button"
-      aria-label="Close connection dialog"
-      onclick={onclose}
-      disabled={busy}><X size={20} /></button
+    <button class="icon-button" aria-label="Close connection dialog" onclick={close} disabled={busy}
+      ><X size={20} /></button
     >
   </div>
   <h2 id="connection-title">{initial ? 'Reconnect database' : 'Connect your database'}</h2>
-  <p class="muted">
-    Direct connection. Passwords are session-only unless you choose system password storage.
-  </p>
+  <p class="muted">Passwords are session-only unless you choose system password storage.</p>
   <form onsubmit={submit} autocomplete="off">
+    <div class="vpn-form-line">
+      <span class="small muted">{vpn.enabled ? 'Connect through OpenVPN' : 'Device network'}</span
+      ><VpnControls
+        enabled={vpn.enabled}
+        disabled={busy}
+        label={name}
+        ontoggle={() => {
+          if (!vpn.profileId) showVpn = true;
+          else vpn = { ...vpn, enabled: !vpn.enabled };
+        }}
+        onsettings={() => (showVpn = true)}
+      />
+    </div>
+    {#if busy && vpn.enabled}
+      <p class="muted small">
+        First use may download the OpenVPN runtime. Later connections reuse it.
+      </p>
+    {/if}
     <label
       >Database engine<select
         bind:value={engine}
@@ -261,8 +289,21 @@
       <span class="muted small"
         ><LockKeyhole size={13} /> {remember ? 'Settings saved locally' : 'Session only'}</span
       ><button class="primary-button" type="submit" disabled={busy || readingCa}
-        >{busy ? 'Checking access…' : 'Connect securely'}<ArrowRight size={16} /></button
+        >{busy
+          ? vpn.enabled
+            ? 'Starting VPN & database…'
+            : 'Checking access…'
+          : 'Connect securely'}<ArrowRight size={16} /></button
       >
     </div>
   </form>
 </dialog>
+{#if showVpn}<VpnDialog
+    {owner}
+    {name}
+    selection={vpn}
+    onapply={async (selection) => {
+      vpn = selection;
+    }}
+    onclose={() => (showVpn = false)}
+  />{/if}

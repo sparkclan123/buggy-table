@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-runtime"
+description = "Enables the vpn_runtime command without any pre-configured scope."
+commands.allow = ["vpn_runtime"]
+
+[[permission]]
+identifier = "deny-vpn-runtime"
+description = "Denies the vpn_runtime command without any pre-configured scope."
+commands.deny = ["vpn_runtime"]

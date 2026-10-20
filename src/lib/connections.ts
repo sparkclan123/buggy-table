@@ -1,6 +1,7 @@
 import { createRedisWorkspace, type RedisView } from './redis-workspace';
 import type { ConnectionInfo, SavedConnection, Overview, ProfileLayout } from './types';
 import { createWorkspace, pendingRows, type TableWorkspace } from './workspace';
+import type { VpnStatus } from './types';
 
 export type Page = 'explorer' | 'overview' | 'privacy' | 'assistant';
 export interface ConnectionWorkspace {
@@ -18,6 +19,7 @@ export interface ConnectionWorkspace {
   overview: Overview | null;
   snapshots: Overview[];
   redis: RedisView;
+  vpnStatus: VpnStatus | null;
 }
 export function connectionWorkspace(
   info: ConnectionInfo,
@@ -47,6 +49,7 @@ export function connectionWorkspace(
     overview: null,
     snapshots: [],
     redis: createRedisWorkspace(),
+    vpnStatus: null,
   };
 }
 export function savedWorkspace(saved: SavedConnection): ConnectionWorkspace {

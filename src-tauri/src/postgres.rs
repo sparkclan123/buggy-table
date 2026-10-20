@@ -35,6 +35,7 @@ pub struct Profile {
     root_ca: Vec<Certificate>,
     pub manual_edits: bool,
     idle: Mutex<Option<Database>>,
+    pub(crate) endpoint: Option<std::net::SocketAddr>,
 }
 
 impl Profile {
@@ -96,6 +97,7 @@ impl Profile {
             root_ca,
             manual_edits: request.manual_edits,
             idle: Mutex::new(None),
+            endpoint: None,
         })
     }
 
@@ -113,6 +115,8 @@ impl Profile {
             server_version: version,
             manual_edits: self.manual_edits,
             tables,
+            vpn: crate::vpn::VpnSelection::default(),
+            vpn_owner: None,
         }
     }
 
@@ -148,10 +152,14 @@ impl Profile {
 
     async fn connect_transport(&self) -> AppResult<Database> {
         let mut config = Config::new();
-        config.host(&self.host).port(self.port).dbname(&self.database).user(&self.username)
+        config.host(&self.host).port(self.endpoint.map_or(self.port, |e| e.port())).dbname(&self.database).user(&self.username)
             .password(self.password.as_bytes()).application_name("table-por")
             .connect_timeout(Duration::from_secs(5))
             .options("-c default_transaction_read_only=on -c search_path=pg_catalog -c statement_timeout=10000 -c lock_timeout=1500 -c idle_in_transaction_session_timeout=10000 -c standard_conforming_strings=on");
+        if let Some(endpoint) = self.endpoint {
+            // host remains the original DB hostname for TLS identity verification.
+            config.hostaddr(endpoint.ip());
+        }
         let (client, task) = match self.tls {
             TlsMode::LocalOnly => {
                 config.ssl_mode(SslMode::Disable);

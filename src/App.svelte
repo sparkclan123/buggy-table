@@ -57,6 +57,9 @@
   import ConfirmClose from './components/ConfirmClose.svelte';
   import ConnectionDialog from './components/ConnectionDialog.svelte';
   import ConnectionManager from './components/ConnectionManager.svelte';
+  import VpnControls from './components/VpnControls.svelte';
+  import VpnDialog from './components/VpnDialog.svelte';
+  import type { VpnSelection, VpnStatus } from './lib/types';
   import { createRedisWorkspace } from './lib/redis-workspace';
   import {
     connectionWorkspace,
@@ -97,6 +100,8 @@
   let showConnection = $state(false);
   let connectionInitial = $state<SavedConnection | null>(null);
   let showManager = $state(false);
+  let vpnOwner = $state<string | null>(null);
+  const vpnEntry = $derived(entries.find((e) => (e.saved?.id ?? e.info.vpnOwner) === vpnOwner));
   const quickConnections = $derived(
     entries
       .filter((e) => e.key !== 'sample')
@@ -356,6 +361,26 @@
   }
 
   onMount(() => {
+    let checkingVpn = false;
+    const vpnTimer = window.setInterval(async () => {
+      if (checkingVpn || !desktopAvailable || document.hidden) return;
+      checkingVpn = true;
+      try {
+        await Promise.all(
+          entries
+            .filter((e) => e.online && e.info.vpn?.enabled)
+            .map(async (e) => {
+              try {
+                e.vpnStatus = await api.vpnStatus(e.info.id);
+              } catch {
+                /* Keep the last known status; never silently select direct routing. */
+              }
+            }),
+        );
+      } finally {
+        checkingVpn = false;
+      }
+    }, 15_000);
     if (desktopAvailable)
       void api
         .connections()
@@ -413,6 +438,7 @@
       });
     window.addEventListener('beforeunload', beforeUnload);
     return () => {
+      window.clearInterval(vpnTimer);
       disposed = true;
       unlisten();
       unlistenTab();
@@ -522,11 +548,23 @@
 
   async function connected(result: ConnectedProfile) {
     const next = result.connection;
-    const existing = entries.find((e) => e.key === (result.profile?.id ?? connectionInitial?.id));
+    const existing = entries.find(
+      (e) =>
+        e.key === (result.profile?.id ?? connectionInitial?.id) ||
+        (!!next.vpnOwner && e.info.vpnOwner === next.vpnOwner),
+    );
     const entry = connectionWorkspace(next, result.profile ?? existing?.saved ?? null);
     if (existing) entries = entries.map((e) => (e.key === existing.key ? entry : e));
     else entries.push(entry);
     activeKey = entry.key;
+    if (next.vpn?.enabled)
+      void api
+        .vpnStatus(next.id)
+        .then((status) => {
+          const current = entries.find((e) => e.info.id === entry.info.id);
+          if (current) current.vpnStatus = status;
+        })
+        .catch(() => {});
     showConnection = false;
     showManager = false;
     error = result.warning ?? '';
@@ -597,6 +635,13 @@
       session.loadedSchemas = [];
       if (!session.saved) {
         const key = session.key;
+        if (session.info.vpnOwner) {
+          try {
+            await api.discardVpnDraft(session.info.vpnOwner);
+          } catch (e) {
+            error = errorMessage(e);
+          }
+        }
         entries = entries.filter((e) => e.key !== key);
         activeKey = entries.find((e) => e.key !== 'sample')?.key ?? 'sample';
       }
@@ -605,6 +650,81 @@
     } finally {
       busy = false;
     }
+  }
+
+  function vpnSelection(entry: ConnectionWorkspace): VpnSelection {
+    if (entry.online)
+      return {
+        enabled: entry.info.vpn?.enabled ?? false,
+        profileId: entry.info.vpn?.profileId ?? entry.saved?.vpn?.profileId ?? null,
+      };
+    return entry.saved?.vpn ?? entry.info.vpn ?? { enabled: false, profileId: null };
+  }
+  function openVpn(entry: ConnectionWorkspace) {
+    if (busy) return;
+    const owner = entry.saved?.id ?? entry.info.vpnOwner;
+    if (!owner) {
+      error = 'Reconnect this database to configure VPN settings.';
+      return;
+    }
+    showManager = false;
+    vpnOwner = owner;
+    if (entry.online)
+      void api
+        .vpnStatus(entry.info.id)
+        .then((status) => (entry.vpnStatus = status))
+        .catch((e) => (error = errorMessage(e)));
+  }
+  async function changeVpn(entry: ConnectionWorkspace, selection: VpnSelection) {
+    if (busy) throw { message: 'Wait for the current operation to finish.' };
+    if (hasEdits(entry))
+      throw {
+        message:
+          'Save or discard this connection’s pending edits before changing or reconnecting VPN.',
+      };
+    const owner = entry.saved?.id ?? entry.info.vpnOwner;
+    if (!owner) throw { message: 'Reconnect this database before configuring VPN.' };
+    busy = true;
+    error = '';
+    try {
+      await persistLayout(entry);
+      const changed = await api.setConnectionVpn(
+        owner,
+        selection,
+        entry.online ? entry.info.id : null,
+      );
+      if (changed.connection) {
+        busy = false;
+        await connected({
+          connection: changed.connection,
+          profile: changed.profile ?? entry.saved,
+          warning: changed.warning,
+        });
+      } else if (changed.profile) {
+        entry.saved = changed.profile;
+        entry.info.vpn = selection;
+      }
+    } finally {
+      busy = false;
+    }
+  }
+  function toggleVpn(entry: ConnectionWorkspace) {
+    const current = vpnSelection(entry);
+    if (!current.profileId) {
+      openVpn(entry);
+      return;
+    }
+    void changeVpn(entry, { ...current, enabled: !current.enabled }).catch(
+      (e) => (error = errorMessage(e)),
+    );
+  }
+  async function testVpn(entry: ConnectionWorkspace): Promise<VpnStatus | null> {
+    if (!entry.online) return null;
+    entry.vpnStatus = await api.vpnStatus(entry.info.id, true);
+    return entry.vpnStatus;
+  }
+  function refreshVpn(entry: ConnectionWorkspace) {
+    return changeVpn(entry, vpnSelection(entry));
   }
 
   async function pinConnection(entry: ConnectionWorkspace) {
@@ -1044,6 +1164,33 @@
             disabled={busy}><Unplug size={13} /></button
           >{/if}
       </div>
+      {#if !isSample}<div class="vpn-sidebar-line">
+          <VpnControls
+            enabled={vpnSelection(session).enabled}
+            label={connection.name}
+            status={session.vpnStatus}
+            disabled={busy}
+            onsettings={() => openVpn(session)}
+            ontoggle={() => toggleVpn(session)}
+            onrefresh={session.online
+              ? () => {
+                  void refreshVpn(session).catch((e) => (error = errorMessage(e)));
+                }
+              : undefined}
+          /><span class="vpn-sidebar-state" title={session.vpnStatus?.message ?? ''}
+            >{!session.online
+              ? 'Offline'
+              : !connection.vpn?.enabled
+                ? 'Direct'
+                : session.vpnStatus?.state === 'ready'
+                  ? 'OK'
+                  : session.vpnStatus?.state === 'unreachable'
+                    ? 'Check'
+                    : session.vpnStatus?.state === 'disconnected'
+                      ? 'Down'
+                      : 'VPN'}</span
+          >
+        </div>{/if}
       {#if connection.engine === 'redis'}
         <div class="schema-root">Database {connection.database} · Standalone</div>
       {:else}
@@ -1573,7 +1720,7 @@
         <div class="workspace-footnote">
           <LockKeyhole size={12} />{isSample
             ? 'Sample data is generated in this app. No database is connected.'
-            : `Direct connection to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : connection.tls === 'require' ? 'TLS · certificate not verified' : 'Local loopback, unencrypted'} · ${session.saved?.hasPassword ? 'System password store' : 'Session-only password'}`}
+            : `${connection.vpn?.enabled ? 'OpenVPN connection' : 'Direct connection'} to ${connection.host}:${connection.port} · ${connection.tls === 'verifyFull' ? 'Verified TLS' : connection.tls === 'require' ? 'TLS · certificate not verified' : 'Local loopback, unencrypted'} · ${session.saved?.hasPassword ? 'System password store' : 'Session-only password'}`}
         </div>
       {:else if page === 'overview'}
         <div class="page-heading">
@@ -1686,10 +1833,10 @@
             <Database size={22} />
             <h3>Direct database access</h3>
             <p>
-              Database connections go directly to the endpoint you enter. Signed releases can check
-              GitHub for updates; database contents and credentials are never included. Turn off
-              automatic checks in the update menu to stop background update requests. There are no
-              analytics, cloud AI or remote assets.
+              Database connections use the device network or their selected isolated OpenVPN
+              profile. Signed releases can check GitHub for updates; database contents and
+              credentials are never included. Turn off automatic checks in the update menu to stop
+              background update requests. There are no analytics, cloud AI or remote assets.
             </p>
             <span class="badge">No database uploads</span>
           </article>
@@ -1795,9 +1942,25 @@
     onpin={pinConnection}
     onremove={removeConnection}
     onclose={() => (showManager = false)}
+    onvpn={openVpn}
+    ontogglevpn={toggleVpn}
+  />{/if}
+{#if vpnOwner && vpnEntry}<VpnDialog
+    owner={vpnOwner}
+    name={vpnEntry.info.name}
+    selection={vpnSelection(vpnEntry)}
+    status={vpnEntry.vpnStatus}
+    online={vpnEntry.online}
+    onapply={(selection) => changeVpn(vpnEntry!, selection)}
+    onclose={() => (vpnOwner = null)}
+    ontest={() => testVpn(vpnEntry!)}
+    onrefresh={() => refreshVpn(vpnEntry!)}
+    onprofileupdate={(profile) => {
+      if (vpnEntry) vpnEntry.saved = profile;
+    }}
   />{/if}
 <UpdateNotice
-  blocked={busy || anyDirty || showConnection || showManager}
+  blocked={busy || anyDirty || showConnection || showManager || !!vpnOwner}
   bind:installing={updating}
 />
 

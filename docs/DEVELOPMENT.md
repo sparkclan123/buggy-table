@@ -1,5 +1,19 @@
 # Development notes
 
+## Isolated OpenVPN fixture
+
+Requires a local Docker engine with Linux containers and OpenSSL. These fixtures generate two-day test certificates and start two disposable VPN/PostgreSQL servers. Both expose `vpn-db.test / 10.77.0.1` in independent VPN networks. No user VPN profile is read. The integration test stops fixture A to test failure isolation.
+
+```sh
+python3 scripts/vpn-fixtures.py start
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features vpn-integration --test vpn_integration -- --ignored --nocapture
+python3 scripts/vpn-fixtures.py stop
+```
+
+The opt-in feature keeps this test separate from the usual Compose database suite. Generated keys/profiles remain under ignored `artifacts/vpn-fixtures`; do not distribute them. Recreate fixtures after certificate expiry. CI runs this in a separate Linux job; desktop packaging and credential storage need their own Mac/Windows checks.
+
+Runtime sources in `src-tauri/vpn` are embedded into the native binary. Their content hash determines the local image tag. Editing them causes the next Prepare/connect to build a new image. App containers publish only an authenticated relay on loopback, use a private tmpfs for OpenVPN credentials, and have no host mounts or Docker socket. `SO_BINDTODEVICE` and a terminating routing policy bind every database/DNS socket to the tunnel. The normal container network is used only for OpenVPN transport and the local relay. Full tunnel pushes cannot alter host routing/DNS.
+
 ## Principles
 
 1. Prefer a readable function and explicit types over a framework. Split modules when there is a real boundary.
