@@ -1,7 +1,18 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
-  import { Plus, Pencil, Trash2, X, Shield, RotateCw, Activity } from '@lucide/svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
+  import {
+    Plus,
+    Pencil,
+    Trash2,
+    X,
+    Shield,
+    RotateCw,
+    Activity,
+    Check,
+    LoaderCircle,
+  } from '@lucide/svelte';
   import { api, errorMessage } from '../lib/api';
+  import VpnSwitch from './VpnSwitch.svelte';
   import type {
     VpnSelection,
     VpnProfile,
@@ -40,6 +51,10 @@
   let busy = $state(true);
   let message = $state('Loading VPN settings…');
   let error = $state('');
+  let preparing = $state(false);
+  let prepareSeconds = $state(0);
+  let prepareTimer: ReturnType<typeof setInterval> | undefined;
+  onDestroy(() => clearInterval(prepareTimer));
   let editing = $state<VpnProfile | null>(null);
   let editor = $state(false);
   let profileName = $state('');
@@ -159,16 +174,37 @@
   }
   async function prepare() {
     busy = true;
+    preparing = true;
+    prepareSeconds = 0;
+    prepareTimer = setInterval(() => (prepareSeconds += 1), 1000);
     error = '';
-    message = 'Preparing OpenVPN… First setup downloads the runtime; later connections reuse it.';
+    message = '';
     try {
       await api.prepareVpn();
       runtime = await api.vpnRuntime();
     } catch (e) {
       error = errorMessage(e);
+      try {
+        runtime = await api.vpnRuntime();
+      } catch {
+        // Retain the setup error if Docker is no longer reachable.
+      }
     } finally {
+      clearInterval(prepareTimer);
+      preparing = false;
       busy = false;
       message = '';
+    }
+  }
+  async function checkRuntime() {
+    busy = true;
+    error = '';
+    try {
+      runtime = await api.vpnRuntime();
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
     }
   }
   async function apply() {
@@ -214,6 +250,7 @@
 <dialog
   bind:this={dialog}
   class="connection-dialog vpn-dialog"
+  aria-busy={busy}
   aria-label={`VPN settings for ${name}`}
   oncancel={(e) => {
     e.preventDefault();
@@ -343,10 +380,13 @@
     </form>
   {:else}
     <div class="vpn-selection">
-      <label class="checkbox-label"
-        ><input type="checkbox" bind:checked={enabled} disabled={busy || !defaultId} />Use VPN for
-        this database</label
-      ><button type="button" class="secondary-button" disabled={busy} onclick={() => edit(null)}
+      <VpnSwitch
+        {enabled}
+        disabled={busy || !defaultId}
+        label="Use VPN for this database"
+        accessibleLabel="Use VPN for this database"
+        ontoggle={() => (enabled = !enabled)}
+      /><button type="button" class="secondary-button" disabled={busy} onclick={() => edit(null)}
         ><Plus size={13} />Add VPN</button
       >
     </div>
@@ -404,13 +444,42 @@
           Add a VPN, then choose it as the default for this database.
         </p>{/if}
     </div>
-    {#if runtime && !runtime.prepared}<div class="vpn-runtime">
-        <span class="small muted">{runtime.message}</span><button
-          type="button"
-          class="secondary-button"
-          disabled={busy}
-          onclick={prepare}>Prepare VPN</button
-        >
+    {#if runtime}<div class="vpn-runtime" class:ready={runtime.prepared}>
+        <div class="vpn-runtime-copy">
+          <strong>
+            {#if preparing}<LoaderCircle size={14} class="vpn-preparing-icon" />
+            {:else if runtime.prepared}<Check size={14} />
+            {:else}<Shield size={14} />{/if}
+            {preparing
+              ? 'Preparing OpenVPN'
+              : runtime.prepared
+                ? 'OpenVPN ready'
+                : runtime.available
+                  ? 'Setup required'
+                  : 'Docker unavailable'}
+          </strong>
+          <span class="muted">
+            {preparing
+              ? `Downloading and building the runtime · ${prepareSeconds}s. First setup can take several minutes.`
+              : runtime.message}
+          </span>
+        </div>
+        <div class="vpn-runtime-actions">
+          <button
+            type="button"
+            class="icon-button vpn-icon"
+            aria-label="Check Docker again"
+            title="Check Docker again"
+            disabled={busy}
+            onclick={checkRuntime}><RotateCw size={14} /></button
+          >
+          {#if !runtime.prepared}<button
+              type="button"
+              class="secondary-button"
+              disabled={busy || !runtime.available}
+              onclick={prepare}>{preparing ? 'Preparing…' : 'Prepare VPN'}</button
+            >{/if}
+        </div>
       </div>{/if}
     <p class="muted small">
       {enabled

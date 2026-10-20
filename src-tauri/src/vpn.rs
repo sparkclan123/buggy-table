@@ -1,4 +1,5 @@
 //! Isolated, device-local OpenVPN profiles. Secrets never enter bookmarks or logs.
+mod docker;
 pub mod runtime;
 pub mod store;
 

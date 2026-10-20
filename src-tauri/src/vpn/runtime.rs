@@ -15,7 +15,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     process::Command,
-    sync::{OnceCell, watch},
+    sync::watch,
     task::JoinHandle,
 };
 use zeroize::Zeroizing;
@@ -86,7 +86,7 @@ impl DockerCli {
             .into_iter()
             .find(|p| p.is_file())
             .ok_or_else(docker_error)?;
-        let mut cmd = Command::new(&binary);
+        let mut cmd = super::docker::command(&binary);
         cmd.args([
             "context",
             "inspect",
@@ -110,7 +110,7 @@ impl DockerCli {
         Ok(cli)
     }
     fn command(&self) -> Command {
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = super::docker::command(&self.binary);
         cmd.arg("--host").arg(&self.endpoint);
         for name in [
             "DOCKER_HOST",
@@ -133,14 +133,6 @@ impl DockerCli {
         let mut cmd = self.command();
         cmd.args(["image", "inspect", "--format", "{{.Id}}", &image_tag()]);
         run_output(cmd, 8).await
-    }
-    async fn available(&self) -> AppResult<()> {
-        let mut cmd = self.command();
-        cmd.args(["info", "--format", "{{.OSType}}"]);
-        if run_output(cmd, 10).await?.trim() != "linux" {
-            return Err(docker_error());
-        }
-        Ok(())
     }
     async fn remove(&self, name: &str) {
         let mut cmd = self.command();
@@ -185,23 +177,16 @@ fn now() -> u64 {
 
 #[derive(Default)]
 pub struct VpnRuntime {
-    cli: OnceCell<DockerCli>,
     build: tokio::sync::Mutex<()>,
 }
 impl VpnRuntime {
-    async fn cli(&self) -> AppResult<&DockerCli> {
-        self.cli.get_or_try_init(DockerCli::discover).await
+    async fn cli(&self) -> AppResult<DockerCli> {
+        // Rechecking setup must observe a changed/restarted Docker context.
+        DockerCli::discover().await
     }
     pub async fn info(&self) -> RuntimeInfo {
         match self.cli().await {
             Ok(cli) => {
-                if let Err(e) = cli.available().await {
-                    return RuntimeInfo {
-                        available: false,
-                        prepared: false,
-                        message: e.message,
-                    };
-                }
                 let prepared = cli.image().await.is_ok();
                 RuntimeInfo {
                     available: true,
@@ -226,7 +211,7 @@ impl VpnRuntime {
     }
     async fn ensure_image(&self) -> AppResult<(DockerCli, String)> {
         let _lock = self.build.lock().await;
-        let cli = self.cli().await?.clone();
+        let cli = self.cli().await?;
         if let Ok(id) = cli.image().await {
             return Ok((cli, id.trim().into()));
         }
@@ -238,11 +223,13 @@ impl VpnRuntime {
         ] {
             std::fs::write(context.path().join(name), text).map_err(|_| docker_error())?;
         }
-        let mut cmd = cli.command();
-        cmd.args(["build", "--quiet", "--tag", &image_tag()])
-            .arg(context.path());
-        run_output(cmd, 240).await.map_err(|_| failure("VPN_PREPARE", "Could not prepare OpenVPN. Check Docker Desktop and internet access, then use Prepare in VPN settings."))?;
-        let id = cli.image().await?;
+        super::docker::build_image(cli.command(), context.path(), &image_tag()).await?;
+        let id = cli.image().await.map_err(|_| {
+            failure(
+                "VPN_PREPARE_IMAGE",
+                "Docker finished setup but the runtime is unavailable in the local image store. Check the selected Docker context, then retry Prepare VPN.",
+            )
+        })?;
         Ok((cli, id.trim().into()))
     }
     pub async fn start(
@@ -621,5 +608,39 @@ fn vpn_error(code: &str) -> AppError {
             "VPN_DISCONNECTED",
             "OpenVPN is disconnected. Reconnect VPN to continue; this connection will not fall back to the normal network.",
         ),
+    }
+}
+
+#[cfg(all(test, feature = "vpn-integration"))]
+mod setup_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires local Docker Desktop; builds only the disposable runtime"]
+    async fn prepare_uses_local_builder_and_loads_the_runtime() {
+        let cli = DockerCli::discover().await.unwrap();
+        let context = tempfile::tempdir().unwrap();
+        for (name, text) in [
+            ("Dockerfile", DOCKERFILE),
+            ("helper.py", HELPER),
+            ("up.py", UP),
+        ] {
+            std::fs::write(context.path().join(name), text).unwrap();
+        }
+        let tag = format!("buggy-table-vpn-prepare-test:{}", uuid::Uuid::new_v4());
+        let mut cmd = cli.command();
+        // A user's custom/cloud builder or platform must not redirect app setup.
+        cmd.env("BUILDX_BUILDER", "nonexistent-builder-for-regression")
+            .env("BUILDKIT_HOST", "tcp://127.0.0.1:1")
+            .env("DOCKER_DEFAULT_PLATFORM", "invalid-platform-for-regression");
+        let result = super::super::docker::build_image(cmd, context.path(), &tag).await;
+        let mut inspect = cli.command();
+        inspect.args(["image", "inspect", "--format", "{{.Id}}", &tag]);
+        let image = run_output(inspect, 8).await;
+        let mut cleanup = cli.command();
+        cleanup.args(["image", "rm", &tag]);
+        let _ = run_output(cleanup, 10).await;
+        result.unwrap();
+        assert!(image.unwrap().trim().starts_with("sha256:"));
     }
 }

@@ -24,6 +24,9 @@
   --row-selected: #e3eefb;
   --row-stripe: #f3f6fa;
   --table-icon: #4c8dbd;
+  --vpn-track: #c6cdd6;
+  --vpn-track-on: #277db5;
+  --vpn-label-on: #24648e;
   --delete-bg: #ffe2e3;
   --delete-ink: #812d35;
   --delete-border: #d8979d;
@@ -54,6 +57,9 @@
   --row-selected: #263d56;
   --row-stripe: #24282f;
   --table-icon: #82bce6;
+  --vpn-track: #505965;
+  --vpn-track-on: #3389c2;
+  --vpn-label-on: #a5d8fb;
   --delete-bg: #512d34;
   --delete-ink: #ffd5d9;
   --delete-border: #a4626d;

@@ -88,7 +88,19 @@ async function setup(page: Page) {
         }
         if (command === 'vpn_profiles')
           return structuredClone(vpns.filter((p) => p.owner === payload.owner));
-        if (command === 'vpn_runtime') return { available: true, prepared: true, message: 'Ready' };
+        if (command === 'vpn_runtime')
+          return target.vpnRuntime ?? { available: true, prepared: true, message: 'Ready' };
+        if (command === 'prepare_vpn') {
+          if (target.vpnPrepareWait)
+            await new Promise<void>((resolve) => (target.finishVpnPrepare = resolve));
+          if (target.vpnPrepareError) throw { message: target.vpnPrepareError };
+          target.vpnRuntime = {
+            available: true,
+            prepared: true,
+            message: 'OpenVPN runtime ready.',
+          };
+          return null;
+        }
         if (command === 'save_vpn_profile') {
           const edit = payload.edit as Record<string, unknown>;
           const old = vpns.find((p) => p.id === edit.id);
@@ -167,7 +179,7 @@ test('VPN default and enabled preference belongs to one database and is restored
   await page.getByRole('button', { name: 'VPN settings for Alpha', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'VPN settings for Alpha' });
   await expect(dialog.getByRole('radio', { name: 'Default VPN Office' })).toBeChecked();
-  await dialog.getByLabel('Use VPN for this database').check();
+  await dialog.getByRole('switch', { name: 'Use VPN for this database' }).click();
   await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('switch', { name: 'Use VPN for Alpha' })).toHaveAttribute(
     'aria-checked',
@@ -231,6 +243,9 @@ test('VPN route checks do not query tables; reconnect refreshes only the selecte
   await start(page);
   await page.getByRole('switch', { name: 'Use VPN for Alpha' }).click();
   await expect(page.getByLabel('VPN ready', { exact: true })).toBeVisible();
+  expect(
+    await page.locator('.vpn-sidebar-state').evaluate((el) => el.scrollWidth <= el.clientWidth),
+  ).toBe(true);
   await page.getByRole('button', { name: 'VPN settings for Alpha', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'VPN settings for Alpha' });
   await expect(dialog.getByText('12 ms · TCP route')).toBeVisible();
@@ -291,7 +306,7 @@ test('new database sends its chosen VPN selection with the connection request', 
     buffer: Buffer.from('client\nTEST_ONLY'),
   });
   await dialog.getByRole('button', { name: 'Save VPN', exact: true }).click();
-  await dialog.getByLabel('Use VPN for this database').check();
+  await dialog.getByRole('switch', { name: 'Use VPN for this database' }).click();
   await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
   await page.getByLabel('Host', { exact: true }).fill('vpn-db.test');
   await page.getByLabel('Database', { exact: true }).fill('fixture');
@@ -335,6 +350,82 @@ test('VPN controls fit a small desktop window in both themes', async ({ page }, 
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     if (info.project.name === 'chromium')
-      await page.screenshot({ path: `artifacts/vpn-ui-${theme}.png` });
+      await page.screenshot({ path: `artifacts/vpn-ui-${theme}.png`, animations: 'disabled' });
+  }
+});
+
+test('VPN setup can recheck Docker, explain a failure and retry to ready', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).vpnRuntime = {
+      available: false,
+      prepared: false,
+      message: 'Open Docker Desktop with Linux containers.',
+    };
+  });
+  await page.getByRole('button', { name: 'VPN settings for Alpha', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'VPN settings for Alpha' });
+  await expect(dialog.getByText('Docker unavailable', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toBeDisabled();
+  await page.evaluate(() => {
+    const target = window as unknown as Record<string, unknown>;
+    target.vpnRuntime = { available: true, prepared: false, message: 'Prepare the runtime.' };
+    target.vpnPrepareError =
+      "Docker's credential helper could not be found. Repair or update Docker Desktop.";
+  });
+  await dialog.getByRole('button', { name: 'Check Docker again' }).click();
+  await dialog.getByRole('button', { name: 'Prepare VPN', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('credential helper could not be found');
+  await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toBeEnabled();
+  await page.evaluate(() => {
+    const target = window as unknown as Record<string, unknown>;
+    target.vpnPrepareError = '';
+    target.vpnPrepareWait = true;
+  });
+  await dialog.getByRole('button', { name: 'Prepare VPN', exact: true }).click();
+  await expect(dialog).toHaveAttribute('aria-busy', 'true');
+  await expect(dialog.getByText('Preparing OpenVPN', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Preparing…', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as unknown as { finishVpnPrepare: () => void }).finishVpnPrepare(),
+  );
+  await expect(dialog.getByText('OpenVPN ready', { exact: true })).toBeVisible();
+  await expect(dialog).toHaveAttribute('aria-busy', 'false');
+  await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toHaveCount(0);
+});
+
+test('VPN switch stays inside its track and supports the keyboard in both themes', async ({
+  page,
+}, info) => {
+  await setup(page);
+  const toggle = page.getByRole('switch', { name: 'Use VPN for Alpha', exact: true });
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    for (const enabled of [true, false]) {
+      await toggle.focus();
+      await toggle.press(enabled ? 'Space' : 'Enter');
+      await expect(toggle).toHaveAttribute('aria-checked', String(enabled));
+      await expect
+        .poll(async () =>
+          toggle.evaluate((button) => {
+            const track = button.querySelector('.vpn-switch-track')!.getBoundingClientRect();
+            const thumb = button.querySelector('.vpn-switch-thumb')!.getBoundingClientRect();
+            return (
+              thumb.left >= track.left &&
+              thumb.right <= track.right &&
+              thumb.top >= track.top &&
+              thumb.bottom <= track.bottom
+            );
+          }),
+        )
+        .toBe(true);
+      if (info.project.name === 'chromium')
+        await page.locator('.vpn-sidebar-line').screenshot({
+          path: `artifacts/vpn-switch-${theme}-${enabled ? 'on' : 'off'}.png`,
+          animations: 'disabled',
+        });
+    }
   }
 });

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Settings2, Shield, RotateCw } from '@lucide/svelte';
+  import { Settings2, RotateCw } from '@lucide/svelte';
+  import VpnSwitch from './VpnSwitch.svelte';
   import type { VpnStatus } from '../lib/types';
   let {
     enabled,
@@ -21,17 +22,7 @@
 </script>
 
 <div class="vpn-controls" aria-label={`VPN for ${label}`}>
-  <Shield size={13} />
-  <button
-    type="button"
-    class="vpn-switch"
-    role="switch"
-    aria-label={`Use VPN for ${label}`}
-    aria-checked={enabled}
-    {disabled}
-    onclick={ontoggle}><span></span></button
-  >
-  <span class="vpn-short-label">VPN</span>
+  <VpnSwitch {enabled} {disabled} accessibleLabel={`Use VPN for ${label}`} {ontoggle} />
   {#if status && enabled}<span
       class="vpn-dot"
       class:healthy={status.state === 'ready'}

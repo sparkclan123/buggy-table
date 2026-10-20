@@ -69,3 +69,16 @@ MySQL ที่ขึ้น “TLS verification failed” ให้ตรวจ 
 ขอบเขตรุ่นนี้: OpenVPN TUN, inline client profile ไม่เกิน 512 KiB และ 50 โปรไฟล์รวม รองรับ username/password และ encrypted private key password ไม่รองรับ TAP, `<connection>` blocks, external certificate/key files, user scripts/plugins, browser SSO หรือ interactive MFA/challenge หากไฟล์มี option ที่ยังไม่รองรับ แอปแจ้งชื่อ option แทนการละเลยเงียบ ๆ การยืนยันกับ VPN ภายนอกแต่ละผู้ให้บริการยังต้องทดสอบกับโปรไฟล์จริงของผู้ใช้
 
 ตัวเลือก `push-peer-info` ใช้ส่งข้อมูล client เพิ่มเติมให้ VPN server ตาม [คู่มือ OpenVPN](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html) และไม่ใช่ script/plugin ตัวนำเข้าใน Preview 0.1.11 ปฏิเสธตัวเลือกนี้โดยผิดพลาด ตั้งแต่ 0.1.12 แก้ให้รับและคงตัวเลือกไว้แล้ว โดยไม่ต้องลบออกจากไฟล์ `.ovpn` หากพบ `Unsupported OpenVPN option` สำหรับตัวเลือกอื่น หมายถึงแอปยังไม่รองรับตัวเลือกนั้น ไม่ได้ยืนยันว่าไฟล์มีอันตราย
+
+### เมื่อ Prepare VPN ไม่สำเร็จ
+
+ตั้งแต่ 0.1.13 หน้า VPN แสดงสถานะ Docker/runtime, เวลาที่ใช้เตรียม และปุ่ม **Check Docker again** เมื่อติดตั้งหรือเปิด Docker Desktop แล้วให้ตรวจซ้ำและกด **Prepare VPN** ครั้งแรกดาวน์โหลดและสร้าง runtime จึงอาจใช้เวลาหลายนาที (จำกัด 10 นาที); ครั้งถัดไปใช้ image เดิม การเตรียมใช้ไฟล์ runtime ที่มากับแอปเท่านั้น ไม่ส่งไฟล์ `.ovpn` หรือรหัส VPN ไปกับการ build
+
+แอปเพิ่มโฟลเดอร์เครื่องมือ Docker เฉพาะ PATH ของ process ลูก เพื่อให้หา credential helper ได้เมื่อเปิดจาก Finder โดยไม่ต้องแก้ PATH ของเครื่อง ตามข้อกำหนดของ [Docker credential helpers](https://github.com/docker/docker-credential-helpers#usage) และใช้ builder ของ local engine พร้อมโหลดผลลัพธ์เข้า image store ตาม [Docker build drivers](https://docs.docker.com/build/builders/drivers/) จึงไม่ใช้ค่า custom/cloud builder ที่ตั้งไว้สำหรับโปรเจกต์อื่น
+
+- **Docker unavailable:** เปิด Docker Desktop ให้ engine พร้อม แล้วกด Check Docker again
+- **Credential helper / Buildx:** ซ่อมหรืออัปเดต Docker Desktop แล้วเปิดแอปใหม่
+- **Saved registry credentials:** ปลดล็อก system password store หรือ sign in ใน Docker Desktop อีกครั้ง
+- **Download certificate:** ตรวจวันที่เครื่องและ CA ของ proxy/องค์กรใน Docker Desktop การตรวจนี้แยกจากใบรับรอง VPN และ database
+- **Network / registry limit / disk space:** ตรวจ network/proxy ของ Docker, การ sign in และพื้นที่ดิสก์ตามข้อความที่แสดง แล้วกด Prepare VPN ใหม่
+- หากเป็นข้อผิดพลาด build ที่ยังจำแนกไม่ได้ ให้ดูรายการที่ล้มเหลวใน **Docker Desktop → Builds** ข้อความกลางใน 0.1.11–0.1.12 เพียงอย่างเดียวระบุสาเหตุของอีกเครื่องไม่ได้
