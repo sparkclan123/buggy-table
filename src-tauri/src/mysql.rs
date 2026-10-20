@@ -1,4 +1,4 @@
-//! MySQL 8 reads use a SELECT-only role, prepared values and dedicated connections.
+//! MySQL 8 reads use guarded SELECTs, read-only transactions and dedicated connections.
 use crate::{
     models::*,
     policy::{self, MAX_RESULT_BYTES, MAX_ROWS},
@@ -15,7 +15,7 @@ fn db_error(error: mysql_async::Error) -> AppError {
     let (code, message) = match error {
         Error::Io(IoError::Tls(_)) => (
             "MYSQL_TLS",
-            "MySQL TLS verification failed. Check the certificate hostname and expiry; for a private CA, choose its PEM file. Plaintext fallback is disabled.",
+            "MySQL TLS verification failed. Use the certificate's hostname and its CA PEM file. For a trusted endpoint with a self-signed certificate, explicitly choose 'TLS · encrypted, certificate not verified' in Transport security. Plaintext fallback is disabled.",
         ),
         Error::Driver(DriverError::NoClientSslFlagFromServer) => (
             "MYSQL_TLS",
@@ -94,21 +94,24 @@ fn db_error(error: mysql_async::Error) -> AppError {
 
 // mysql_async normally drains pending results in a background task on Drop.
 // Own the connection so cancellation closes it instead of draining a large read.
-pub struct Database(Option<Conn>);
+pub struct Database {
+    conn: Option<Conn>,
+    version: String,
+}
 impl std::ops::Deref for Database {
     type Target = Conn;
     fn deref(&self) -> &Conn {
-        self.0.as_ref().expect("live connection")
+        self.conn.as_ref().expect("live connection")
     }
 }
 impl std::ops::DerefMut for Database {
     fn deref_mut(&mut self) -> &mut Conn {
-        self.0.as_mut().expect("live connection")
+        self.conn.as_mut().expect("live connection")
     }
 }
 impl Drop for Database {
     fn drop(&mut self) {
-        if let Some(conn) = self.0.take()
+        if let Some(conn) = self.conn.take()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
             runtime.spawn(async move {
@@ -134,16 +137,20 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
         .resolved_ips(p.endpoint.map(|e| vec![e.ip()]))
         .user(Some(p.username.clone()))
         .pass(Some(p.password.to_string()))
-        .db_name(Some(p.database.clone()))
+        .db_name((!p.database.is_empty()).then(|| p.database.clone()))
         .prefer_socket(false)
         .enable_cleartext_plugin(false)
         .max_allowed_packet(Some(MAX_RESULT_BYTES))
         .ssl_opts((p.tls != TlsMode::LocalOnly).then_some(tls));
-    let mut conn = Database(Some(Conn::new(opts).await.map_err(|error| {
+    let raw = Conn::new(opts).await.map_err(|error| {
         if p.tls == TlsMode::Require && matches!(error, mysql_async::Error::Io(mysql_async::IoError::Tls(_))) {
             AppError::new("MYSQL_TLS", "MySQL TLS handshake failed. Check the server TLS configuration and whether a client certificate is required. Plaintext fallback is disabled.")
         } else { db_error(error) }
-    })?));
+    })?;
+    let mut conn = Database {
+        conn: Some(raw),
+        version: String::new(),
+    };
     let version: String = conn
         .query_first("SELECT VERSION()")
         .await
@@ -154,17 +161,10 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
             "This adapter supports MySQL 8.x. MariaDB has not been validated.",
         ));
     }
-    // Reject roles/proxy, global admin privileges, FILE, EXECUTE and GRANT OPTION.
-    // Rechecked on every operation, so privilege drift is not silently accepted.
-    let grants: Vec<String> = conn
-        .query("SHOW GRANTS FOR CURRENT_USER()")
-        .await
-        .map_err(db_error)?;
-    if grants.is_empty() || grants.iter().any(|g| !safe_grant(g)) {
-        return Err(AppError::policy(
-            "Use a MySQL account with only direct SELECT/SHOW VIEW grants (no roles, writes, EXECUTE, FILE or GRANT OPTION).",
-        ));
-    }
+    conn.version = version;
+    // Account privileges do not enable writes in the application. Every operation
+    // uses fixed metadata SQL or a reconstructed SELECT, within a read-only
+    // transaction. Never send unvalidated user SQL, functions or views.
     conn.query_drop("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES', max_execution_time = 10000, lock_wait_timeout = 2").await.map_err(db_error)?;
     conn.query_drop("START TRANSACTION READ ONLY")
         .await
@@ -172,33 +172,65 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
     Ok(conn)
 }
 
-fn safe_grant(grant: &str) -> bool {
-    let Some(rest) = grant.strip_prefix("GRANT ") else {
-        return false;
-    };
-    let Some((privileges, target)) = rest.split_once(" ON ") else {
-        return false;
-    };
-    !target.contains(" WITH GRANT OPTION")
-        && privileges
-            .split(", ")
-            .all(|p| matches!(p, "USAGE" | "SELECT" | "SHOW VIEW"))
+fn selected_database<'a>(p: &'a RemoteProfile, schema: Option<&'a str>) -> AppResult<&'a str> {
+    let name = schema.filter(|s| !s.is_empty()).unwrap_or(&p.database);
+    if name.is_empty() {
+        return Err(AppError::new(
+            "MYSQL_DATABASE_REQUIRED",
+            "Expand a database and select a table first, or use a database-qualified table in SQL.",
+        ));
+    }
+    if name.len() > 253 || name.contains('\0') {
+        return Err(AppError::policy("Invalid database name."));
+    }
+    Ok(name)
+}
+
+pub async fn schemas(p: &RemoteProfile) -> AppResult<Vec<String>> {
+    let mut conn = open(p).await?;
+    let names: Vec<String> = conn
+        .query(
+            "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME LIMIT 1001",
+        )
+        .await
+        .map_err(db_error)?;
+    if names.len() > 1000 {
+        return Err(AppError::policy(
+            "This server exposes more than 1000 databases.",
+        ));
+    }
+    Ok(names)
+}
+
+pub async fn schema_tables(p: &RemoteProfile, schema: &str) -> AppResult<Vec<TableInfo>> {
+    let schema = selected_database(p, Some(schema))?;
+    let mut conn = open(p).await?;
+    tables(&mut conn, schema).await
 }
 
 pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> {
-    let records: Vec<Row> = conn.exec("SELECT t.TABLE_NAME, t.TABLE_ROWS, c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_KEY, c.EXTRA FROM information_schema.TABLES t JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA=t.TABLE_SCHEMA AND c.TABLE_NAME=t.TABLE_NAME WHERE t.TABLE_SCHEMA=? AND t.TABLE_TYPE='BASE TABLE' AND t.ENGINE='InnoDB' ORDER BY t.TABLE_NAME,c.ORDINAL_POSITION LIMIT 16385", (schema,)).await.map_err(db_error)?;
+    catalog(conn, schema, None).await
+}
+
+async fn catalog(conn: &mut Conn, schema: &str, table: Option<&str>) -> AppResult<Vec<TableInfo>> {
+    let records: Vec<Row> = conn.exec("SELECT t.TABLE_NAME, t.TABLE_ROWS, c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_KEY, c.EXTRA, t.TABLE_TYPE, t.ENGINE FROM information_schema.TABLES t LEFT JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA=t.TABLE_SCHEMA AND c.TABLE_NAME=t.TABLE_NAME WHERE t.TABLE_SCHEMA=? AND (? IS NULL OR t.TABLE_NAME=?) ORDER BY t.TABLE_NAME,c.ORDINAL_POSITION LIMIT 16385", (schema, table, table)).await.map_err(db_error)?;
     if records.len() > 16384 {
         return Err(AppError::policy(
             "MySQL catalog exceeds the 16,384-column metadata limit.",
         ));
     }
     let mut tables: Vec<TableInfo> = Vec::new();
-    let mut excluded = std::collections::HashSet::new();
     for row in records {
         let name: String = row.get(0).unwrap_or_default();
-        let ty: String = row.get(3).unwrap_or_default();
-        let extra: String = row.get(6).unwrap_or_default();
-        if !matches!(
+        let ty = row
+            .get::<Option<String>, _>(3)
+            .flatten()
+            .unwrap_or_default();
+        let extra = row
+            .get::<Option<String>, _>(6)
+            .flatten()
+            .unwrap_or_default();
+        let unsupported = !matches!(
             ty.as_str(),
             "tinyint"
                 | "smallint"
@@ -221,10 +253,16 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
                 | "year"
                 | "enum"
                 | "set"
-        ) || extra.contains("GENERATED")
-        {
-            excluded.insert(name.clone());
-        }
+                | "json"
+                | "bit"
+                | "binary"
+                | "varbinary"
+                | "tinyblob"
+                | "blob"
+                | "mediumblob"
+                | "longblob"
+        ) || extra.contains("VIRTUAL GENERATED")
+            || extra.contains("STORED GENERATED");
         if tables.last().is_none_or(|t| t.name != name) {
             if tables.len() >= 500 {
                 return Err(AppError::policy(
@@ -234,8 +272,18 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
             tables.push(TableInfo {
                 insertable: false,
                 deletable: false,
-                relation_kind: "table".into(),
-                read_blocked_reason: None,
+                relation_kind: if row.get::<String, _>(7).as_deref() == Some("VIEW") {
+                    "view".into()
+                } else {
+                    "table".into()
+                },
+                read_blocked_reason: if row.get::<String, _>(7).as_deref() != Some("BASE TABLE")
+                    || row.get::<Option<String>, _>(8).flatten().as_deref() != Some("InnoDB")
+                {
+                    Some("Structure only: reads currently support InnoDB base tables; views and other engines remain visible here.".into())
+                } else {
+                    None
+                },
                 schema: schema.into(),
                 name,
                 estimated_rows: row
@@ -245,49 +293,56 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
                 columns: vec![],
             });
         }
+        if unsupported && tables.last().unwrap().read_blocked_reason.is_none() {
+            tables.last_mut().unwrap().read_blocked_reason = Some(
+                "Structure only: this table has a generated column or a type not yet supported for reads.".into(),
+            );
+        }
+        let Some(column_name) = row.get::<Option<String>, _>(2).flatten() else {
+            tables.last_mut().unwrap().read_blocked_reason =
+                Some("Structure only: column metadata is not accessible to this account.".into());
+            continue;
+        };
         tables.last_mut().unwrap().columns.push(ColumnInfo {
             insertable: false,
             has_default: false,
             type_schema: String::new(),
-            name: row.get(2).unwrap_or_default(),
+            name: column_name,
             data_type: ty,
             nullable: row.get::<String, _>(4).is_some_and(|v| v == "YES"),
             primary_key: row.get::<String, _>(5).is_some_and(|v| v == "PRI"),
             editable: false,
         });
     }
-    tables.retain(|t| !excluded.contains(&t.name));
     Ok(tables)
 }
 
 pub async fn connect(p: &RemoteProfile, id: String) -> AppResult<ConnectionInfo> {
     let mut conn = open(p).await?;
-    let version = conn
-        .query_first::<String, _>("SELECT VERSION()")
-        .await
-        .map_err(db_error)?
-        .unwrap_or_default();
-    let tables = tables(&mut conn, &p.database).await?;
+    let version = conn.version.clone();
+    let tables = if p.database.is_empty() {
+        vec![]
+    } else {
+        tables(&mut conn, &p.database).await?
+    };
     Ok(p.info(id, version, tables))
 }
 
-async fn approved_tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> {
-    tables(conn, schema).await
+async fn approved_table(conn: &mut Conn, schema: &str, name: &str) -> AppResult<TableInfo> {
+    catalog(conn, schema, Some(name)).await?.into_iter()
+        .find(|t| t.name == name && t.read_blocked_reason.is_none())
+        .ok_or_else(|| AppError::policy("Table is not readable in this database. Refresh its catalog to inspect supported types and permissions."))
 }
 
 pub async fn browse(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<QueryResult> {
     let mut conn = open(p).await?;
-    let tables = approved_tables(&mut conn, &p.database).await?;
-    let table = tables
-        .iter()
-        .find(|t| t.name == r.table)
-        .ok_or_else(|| AppError::policy("Table is outside the supported MySQL scope."))?;
-    let (sql, params) = browse_statement(p, table, r, false)?;
+    let schema = selected_database(p, r.schema.as_deref())?;
+    let table = approved_table(&mut conn, schema, &r.table).await?;
+    let (sql, params) = browse_statement(&table, r, false)?;
     read(&mut conn, sql, params, r.checked_page_size()?).await
 }
 
 fn browse_statement(
-    p: &RemoteProfile,
     table: &TableInfo,
     r: &BrowseRequest,
     count: bool,
@@ -335,7 +390,7 @@ fn browse_statement(
     let mut sql = format!(
         "SELECT {} FROM {}.{}",
         if count { "CAST(COUNT(*) AS CHAR)" } else { "*" },
-        quote(&p.database),
+        quote(&table.schema),
         quote(&table.name)
     );
     if !conditions.is_empty() {
@@ -379,12 +434,9 @@ fn browse_statement(
 
 pub async fn count(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<RowCount> {
     let mut conn = open(p).await?;
-    let tables = approved_tables(&mut conn, &p.database).await?;
-    let table = tables
-        .iter()
-        .find(|t| t.name == r.table)
-        .ok_or_else(|| AppError::policy("Table is outside the supported MySQL scope."))?;
-    let (sql, params) = browse_statement(p, table, r, true)?;
+    let schema = selected_database(p, r.schema.as_deref())?;
+    let table = approved_table(&mut conn, schema, &r.table).await?;
+    let (sql, params) = browse_statement(&table, r, true)?;
     conn.query_drop("SET SESSION max_execution_time = 5000")
         .await
         .map_err(db_error)?;
@@ -402,7 +454,11 @@ pub async fn count(p: &RemoteProfile, r: &BrowseRequest) -> AppResult<RowCount> 
 
 pub async fn query(p: &RemoteProfile, r: &QueryRequest) -> AppResult<QueryResult> {
     let mut conn = open(p).await?;
-    let tables = approved_tables(&mut conn, &p.database).await?;
+    let tables = if let Some((schema, name)) = policy::mysql_relation(&r.sql)? {
+        vec![approved_table(&mut conn, &schema, &name).await?]
+    } else {
+        vec![]
+    };
     let approved = policy::approve_mysql(&r.sql, &tables)?;
     let sql = if r.explain {
         format!("EXPLAIN FORMAT=JSON {}", approved.sql())
@@ -475,16 +531,21 @@ fn text_value(value: Value) -> Option<String> {
     }
 }
 
-pub async fn indexes(p: &RemoteProfile, table: &str) -> AppResult<Vec<IndexInfo>> {
+pub async fn indexes(
+    p: &RemoteProfile,
+    table: &str,
+    schema: Option<&str>,
+) -> AppResult<Vec<IndexInfo>> {
     let mut conn = open(p).await?;
-    if !tables(&mut conn, &p.database)
+    let schema = selected_database(p, schema)?;
+    if !catalog(&mut conn, schema, Some(table))
         .await?
         .iter()
         .any(|t| t.name == table)
     {
         return Err(AppError::policy("Unknown table."));
     }
-    let rows: Vec<Row> = conn.exec("SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX", (&p.database, table)).await.map_err(db_error)?;
+    let rows: Vec<Row> = conn.exec("SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX", (schema, table)).await.map_err(db_error)?;
     let mut indexes: Vec<IndexInfo> = vec![];
     for row in rows {
         let name: String = row.get(0).unwrap_or_default();
@@ -518,7 +579,7 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
         .await
         .map_err(db_error)?
         .unwrap_or_default();
-    let size: Option<String> = conn.exec_first("SELECT CAST(COALESCE(SUM(DATA_LENGTH+INDEX_LENGTH),0) AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA=?", (&p.database,)).await.map_err(db_error)?;
+    let size: Option<String> = conn.exec_first("SELECT CAST(COALESCE(SUM(DATA_LENGTH+INDEX_LENGTH),0) AS CHAR) FROM information_schema.TABLES WHERE (?='' OR TABLE_SCHEMA=?)", (&p.database, &p.database)).await.map_err(db_error)?;
     let status: Vec<(String,String)> = conn.query("SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Com_commit','Com_rollback')").await.map_err(db_error)?;
     let stats: std::collections::HashMap<_, _> = status.into_iter().collect();
     let get = |name: &str| {
@@ -528,7 +589,11 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
             .unwrap_or_else(|| "Not reported".into())
     };
     Ok(Overview {
-        database: p.database.clone(),
+        database: if p.database.is_empty() {
+            "Accessible databases".into()
+        } else {
+            p.database.clone()
+        },
         server_version: snapshot.0,
         database_size: format!("{} bytes (estimate)", size.clone().unwrap_or_default()),
         database_size_bytes: size.unwrap_or_default(),
@@ -545,6 +610,35 @@ pub async fn overview(p: &RemoteProfile) -> AppResult<Overview> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "requires local Compose MySQL fixture"]
+    async fn privileged_mysql_connection_is_server_read_only() {
+        let profile = RemoteProfile::new(ConnectRequest {
+            engine: Engine::Mysql,
+            name: "Disposable fixture".into(),
+            host: "127.0.0.1".into(),
+            port: 13306,
+            database: String::new(),
+            username: "root".into(),
+            password: "local-mysql-admin".into(),
+            schema: String::new(),
+            tls: TlsMode::LocalOnly,
+            root_ca_pem: String::new(),
+            manual_edits: false,
+        })
+        .unwrap();
+        let mut conn = open(&profile).await.unwrap();
+        let error = conn
+            .query_drop("UPDATE tablepor_test.items SET label='must not write' WHERE id=1")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, mysql_async::Error::Server(e) if e.code == 1792));
+        let label: Option<String> = conn
+            .query_first("SELECT label FROM tablepor_test.items WHERE id=1")
+            .await
+            .unwrap();
+        assert_eq!(label.as_deref(), Some("First"));
+    }
     #[test]
     fn server_errors_identify_the_check_and_redact_server_details() {
         for (code, expected) in [
@@ -565,19 +659,6 @@ mod tests {
             }));
             assert_eq!(error.code, expected);
             assert!(!error.message.contains("CANARY"));
-        }
-    }
-    #[test]
-    fn grants_fail_closed() {
-        assert!(safe_grant("GRANT SELECT ON `app`.* TO `reader`@`%`"));
-        for g in [
-            "GRANT ALL PRIVILEGES ON *.* TO `root`@`%`",
-            "GRANT SELECT, EXECUTE ON *.* TO x",
-            "GRANT SELECT ON *.* TO x WITH GRANT OPTION",
-            "GRANT `reader_role`@`%` TO x",
-            "GRANT PROXY ON x TO y",
-        ] {
-            assert!(!safe_grant(g));
         }
     }
 }

@@ -16,6 +16,7 @@ export interface ConnectionWorkspace {
   navSchema: string;
   schemas: string[];
   loadedSchemas: string[];
+  expandedSchemas: string[];
   overview: Overview | null;
   snapshots: Overview[];
   redis: RedisView;
@@ -44,8 +45,9 @@ export function connectionWorkspace(
     page: 'explorer',
     search: '',
     navSchema: saved?.layout.selectedSchema || info.schema,
-    schemas: [info.schema],
-    loadedSchemas: online ? [info.schema] : [],
+    schemas: info.schema ? [info.schema] : [],
+    loadedSchemas: online && info.schema ? [info.schema] : [],
+    expandedSchemas: info.engine === 'mysql' && info.schema ? [info.schema] : [],
     overview: null,
     snapshots: [],
     redis: createRedisWorkspace(),

@@ -57,6 +57,7 @@
   import ConfirmClose from './components/ConfirmClose.svelte';
   import ConnectionDialog from './components/ConnectionDialog.svelte';
   import ConnectionManager from './components/ConnectionManager.svelte';
+  import MySqlDatabases from './components/MySqlDatabases.svelte';
   import VpnControls from './components/VpnControls.svelte';
   import VpnDialog from './components/VpnDialog.svelte';
   import type { VpnSelection, VpnStatus } from './lib/types';
@@ -227,6 +228,7 @@
 
   async function selectTable(table: TableInfo) {
     if (busy) return;
+    session.navSchema = table.schema;
     session.page = 'explorer';
     error = '';
     const id = tableKey(table.schema, table.name);
@@ -497,7 +499,8 @@
   async function ensureSchema(schema: string, refresh = false) {
     if (
       isSample ||
-      connection.engine !== 'postgres' ||
+      connection.engine === 'redis' ||
+      !schema ||
       (!refresh && session.loadedSchemas.includes(schema))
     )
       return;
@@ -515,6 +518,12 @@
       busy = true;
       await ensureSchema(workspace.schema || session.navSchema);
       if (workspace.schema) session.navSchema = workspace.schema;
+      if (
+        connection.engine === 'mysql' &&
+        workspace.schema &&
+        !session.expandedSchemas.includes(workspace.schema)
+      )
+        session.expandedSchemas.push(workspace.schema);
       if (!workspace.filters[0]?.column && selected)
         workspace.filters = [
           { column: selected.columns[0]?.name ?? '', operator: 'equals', value: '' },
@@ -546,6 +555,43 @@
     }
   }
 
+  async function toggleDatabase(name: string, refresh = false) {
+    if (busy || !session.online) return;
+    if (!refresh && session.expandedSchemas.includes(name)) {
+      session.expandedSchemas = session.expandedSchemas.filter((s) => s !== name);
+      return;
+    }
+    busy = true;
+    error = '';
+    try {
+      await ensureSchema(name, refresh);
+      if (!session.expandedSchemas.includes(name)) session.expandedSchemas.push(name);
+      session.navSchema = name;
+      if (!workspace.selectedName) workspace.schema = name;
+      void persistLayout(session);
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function refreshDatabases() {
+    if (busy || !session.online) return;
+    busy = true;
+    error = '';
+    try {
+      session.schemas = await api.schemas(connection.id);
+      session.expandedSchemas = session.expandedSchemas.filter((s) => session.schemas.includes(s));
+      session.loadedSchemas = session.loadedSchemas.filter((s) => session.schemas.includes(s));
+      session.info.tables = connection.tables.filter((t) => session.schemas.includes(t.schema));
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function connected(result: ConnectedProfile) {
     const next = result.connection;
     const existing = entries.find(
@@ -569,10 +615,10 @@
     showManager = false;
     error = result.warning ?? '';
     let schemaWarning = '';
-    if (next.engine === 'postgres') {
+    if (next.engine !== 'redis') {
       busy = true;
       try {
-        session.schemas = (await api.schemas(next.id)) ?? [next.schema];
+        session.schemas = (await api.schemas(next.id)) ?? (next.schema ? [next.schema] : []);
       } catch (e) {
         schemaWarning = errorMessage(e);
       } finally {
@@ -1125,7 +1171,7 @@
             <button
               onclick={() => switchConnection(entry)}
               disabled={busy}
-              title={`${entry.info.name} · ${entry.info.host} / ${entry.info.database}`}
+              title={`${entry.info.name} · ${entry.info.host} / ${entry.info.database || 'All databases'}`}
               aria-label={`Switch to ${entry.info.name}`}
               ><span class="engine-code"
                 >{entry.info.engine === 'postgres'
@@ -1196,61 +1242,83 @@
       {:else}
         <div class="table-search">
           <Search size={13} /><input
-            aria-label="Search tables"
+            aria-label={connection.engine === 'mysql'
+              ? 'Search databases and loaded tables'
+              : 'Search tables'}
             bind:value={session.search}
-            placeholder="Find a table…"
+            placeholder={connection.engine === 'mysql' ? 'Find database / table…' : 'Find a table…'}
+            title={connection.engine === 'mysql'
+              ? 'Search databases and tables already loaded. Expand a database to load its tables.'
+              : 'Search tables'}
             spellcheck="false"
             disabled={!session.online}
           />
         </div>
-        <div class="table-list">
-          {#each visibleTables as table}<button
-              class:selected={page === 'explorer' &&
-                workspace.selectedName === table.name &&
-                workspace.schema === table.schema}
-              onclick={() => selectTable(table)}
-              title={table.readBlockedReason ?? table.relationKind ?? 'table'}
-              disabled={busy || !session.online}><Table2 size={14} />{table.name}</button
-            >{/each}
-          {#if !visibleTables.length}<p class="sidebar-empty">
-              {!session.online
-                ? 'Reconnect to load tables'
-                : search
-                  ? 'No matching tables'
-                  : 'No tables or views in this schema'}
-            </p>{/if}
-        </div>
+        {#if connection.engine === 'mysql'}
+          {#if session.online}
+            <MySqlDatabases
+              names={session.schemas}
+              tables={connection.tables}
+              expanded={session.expandedSchemas}
+              loaded={session.loadedSchemas}
+              selectedSchema={workspace.schema || session.navSchema}
+              selectedTable={workspace.selectedName}
+              {search}
+              disabled={busy}
+              ontoggle={(name) => toggleDatabase(name)}
+              onrefresh={(name) => toggleDatabase(name, true)}
+              onreload={refreshDatabases}
+              onselect={selectTable}
+            />
+          {:else}<p class="sidebar-empty">Reconnect to load databases</p>{/if}
+        {:else}<div class="table-list">
+            {#each visibleTables as table}<button
+                class:selected={page === 'explorer' &&
+                  workspace.selectedName === table.name &&
+                  workspace.schema === table.schema}
+                onclick={() => selectTable(table)}
+                title={table.readBlockedReason ?? table.relationKind ?? 'table'}
+                disabled={busy || !session.online}><Table2 size={14} />{table.name}</button
+              >{/each}
+            {#if !visibleTables.length}<p class="sidebar-empty">
+                {!session.online
+                  ? 'Reconnect to load tables'
+                  : search
+                    ? 'No matching tables'
+                    : 'No tables or views in this schema'}
+              </p>{/if}
+          </div>{/if}
       {/if}
     </div>
     <div class="sidebar-bottom">
-      <div class="schema-control">
-        <span>{connection.engine === 'postgres' ? 'Schema' : 'Database'}</span>
-        {#if connection.engine === 'postgres' && !isSample}
-          <button
-            class="icon-button schema-refresh"
-            aria-label="Refresh schema"
-            title="Refresh schema"
-            onclick={() => changeSchema(session.navSchema)}
-            disabled={busy || !session.online}
+      {#if connection.engine !== 'mysql'}<div class="schema-control">
+          <span>{connection.engine === 'postgres' ? 'Schema' : 'Database'}</span>
+          {#if connection.engine === 'postgres' && !isSample}
+            <button
+              class="icon-button schema-refresh"
+              aria-label="Refresh schema"
+              title="Refresh schema"
+              onclick={() => changeSchema(session.navSchema)}
+              disabled={busy || !session.online}
+            >
+              <RefreshCw size={13} />
+            </button>
+          {/if}
+          <select
+            aria-label="Select PostgreSQL schema"
+            value={session.navSchema}
+            disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
+            onchange={async (event) => {
+              const select = event.currentTarget;
+              await changeSchema(select.value);
+              select.value = session.navSchema;
+            }}
           >
-            <RefreshCw size={13} />
-          </button>
-        {/if}
-        <select
-          aria-label="Select PostgreSQL schema"
-          value={session.navSchema}
-          disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
-          onchange={async (event) => {
-            const select = event.currentTarget;
-            await changeSchema(select.value);
-            select.value = session.navSchema;
-          }}
-        >
-          {#each [...new Set([session.navSchema, ...session.schemas])] as schema}
-            <option value={schema}>{schema}</option>
-          {/each}
-        </select>
-      </div>
+            {#each [...new Set([session.navSchema, ...session.schemas])] as schema}
+              <option value={schema}>{schema}</option>
+            {/each}
+          </select>
+        </div>{/if}
       <button class:active={page === 'privacy'} onclick={() => navigate('privacy')} disabled={busy}
         ><Settings2 size={16} />Privacy & access<ChevronRight size={14} /></button
       >
@@ -1266,7 +1334,7 @@
     <header class="topbar">
       <div class="breadcrumbs">
         <PanelLeft size={16} /><span
-          title={`${connection.host}:${connection.port} / ${connection.database}`}
+          title={`${connection.host}:${connection.port} / ${connection.database || 'All databases'}`}
           >{isSample ? 'Workspace' : connection.name}</span
         ><ChevronRight size={12} /><strong
           >{page === 'explorer'
@@ -1311,7 +1379,10 @@
         <div class="feature-empty">
           <div class="large-icon"><Unplug size={28} /></div>
           <h2>{connection.name}</h2>
-          <p>{engineName} · {connection.host}:{connection.port} / {connection.database}</p>
+          <p>
+            {engineName} · {connection.host}:{connection.port} / {connection.database ||
+              'All databases'}
+          </p>
           <p>Saved on this device. Reconnect when you are ready.</p>
           <button class="primary-button" onclick={() => reconnect(session)} disabled={busy}
             ><PlugZap size={16} />{busy ? 'Connecting…' : 'Reconnect'}</button
@@ -1349,7 +1420,9 @@
             >
           </h1>
           <span class="muted small"
-            >{connection.database} / {workspace.schema || session.navSchema}{#if selected}
+            >{connection.engine === 'mysql'
+              ? workspace.schema || session.navSchema || 'Choose a database'
+              : `${connection.database} / ${workspace.schema || session.navSchema}`}{#if selected}
               · {selected.columns.length} columns{/if}</span
           >
           <span class="tab-spacer"></span>

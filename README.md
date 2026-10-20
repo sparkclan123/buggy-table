@@ -8,7 +8,7 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 
 - เลือก PostgreSQL / MySQL / Redis ในหน้าต่อฐานข้อมูล พร้อม port เริ่มต้นตามชนิด
 - OpenVPN แยกต่อ connection ผ่าน Docker Desktop: สวิตช์เปิด/ปิด, โปรไฟล์/default แยกแต่ละฐานข้อมูล, ดูสถานะ, Test route และ Reconnect โดยไม่เปลี่ยน routing/DNS ของเครื่อง ดูวิธีใช้และข้อจำกัดใน [Connection workspaces](docs/CONNECTIONS.md#openvpn-แยกต่อฐานข้อมูล)
-- MySQL: ตารางหลายแท็บ, filter/sort, SQL SELECT, EXPLAIN, structure, indexes และ overview; ต้องใช้บัญชี SELECT/SHOW VIEW เท่านั้น
+- MySQL: ตารางหลายแท็บ, filter/sort, SQL SELECT, EXPLAIN, structure, indexes และ overview; ไม่บังคับชื่อ database ตอนเชื่อมต่อ กด + เพื่อเปิดตารางในแต่ละ database; บัญชี admin ใช้อ่านได้ด้วย
 - Redis: SCAN คีย์ตาม pattern, ดูค่า/ชนิด/TTL, อ่าน string/hash/list/set/sorted set และรันคำสั่งอ่านแบบ JSON arguments
 - เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL และ MySQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว
 - เปิดหลายตารางเป็นแท็บด้านบน เก็บ filter, page, SQL, scroll และ pending edits แยกกัน
@@ -131,7 +131,7 @@ LIMIT 20;
 | MySQL 8.4 | `127.0.0.1:13306` | `tablepor_test` | `tablepor_reader` | `local-mysql-reader` |
 | Redis 8 | `127.0.0.1:16379` | `0` | `tablepor_reader` | `local-redis-reader` |
 
-เลือก Local only สำหรับ fixture เท่านั้น สำหรับเครื่องอื่นใช้ verified TLS และ certificate ที่ระบบเชื่อถือ; PostgreSQL รองรับ custom CA และโหมด TLS แบบเข้ารหัสโดยไม่ตรวจใบรับรอง ดู [การแก้ปัญหาเชื่อมต่อ](docs/CONNECTIONS.md) MySQL ต้องมี direct SELECT/SHOW VIEW grants ไม่มี roles/สิทธิ์เขียน ส่วน Redis ควรใช้ ACL user จำกัดคำสั่ง ไม่ต้องให้สิทธิ์ admin; แอปบล็อกคำสั่งเขียน/ลบเองด้วย
+เลือก Local only สำหรับ fixture เท่านั้น สำหรับเครื่องอื่นใช้ verified TLS และ certificate ที่ระบบเชื่อถือ; PostgreSQL รองรับ custom CA และโหมด TLS แบบเข้ารหัสโดยไม่ตรวจใบรับรอง ดู [การแก้ปัญหาเชื่อมต่อ](docs/CONNECTIONS.md) MySQL รองรับบัญชี reader หรือ admin โดยแอปยังอ่านอย่างเดียว เลือกใช้ reader เพื่อจำกัดสิทธิ์ที่เซิร์ฟเวอร์เพิ่มเติมได้ ส่วน Redis ควรใช้ ACL user จำกัดคำสั่ง ไม่ต้องให้สิทธิ์ admin; แอปบล็อกคำสั่งเขียน/ลบเองด้วย
 
 MySQL SQL ใช้ชื่อแบบ ``SELECT * FROM `tablepor_test`.`items` LIMIT 200``. Redis เปิดหน้าคีย์แยกจากตาราง SQL ใช้ Scan / refresh และ Next scan; คลิกคีย์เพื่อดู preview และ TTL หรือกรอก `["GET", "my-key"]`, `["INFO", "memory"]`, `["HSCAN", "my-hash", "0"]` แล้ว Run command. GET แสดงสูงสุด 64 KiB; collection แสดงชุดแรกและใช้ cursor อ่านต่อได้ คำสั่งต้องเป็น JSON array เพื่อรองรับชื่อคีย์ที่มีช่องว่างอย่างไม่กำกวม
 

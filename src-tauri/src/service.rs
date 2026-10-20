@@ -536,7 +536,7 @@ impl Workbench {
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
         if let Adapter::Mysql(p) = &profile.adapter {
-            return bounded_metadata(mysql::indexes(p, table_name), cancelled).await;
+            return bounded_metadata(mysql::indexes(p, table_name, schema), cancelled).await;
         }
         let profile = profile.postgres()?;
         bounded_metadata(
@@ -557,6 +557,9 @@ impl Workbench {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
+        if let Adapter::Mysql(p) = &profile.adapter {
+            return bounded_metadata(mysql::schemas(p), cancelled).await;
+        }
         let profile = profile.postgres()?;
         bounded_metadata(
             async {
@@ -578,6 +581,9 @@ impl Workbench {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
+        if let Adapter::Mysql(p) = &profile.adapter {
+            return bounded_metadata(mysql::schema_tables(p, schema), cancelled).await;
+        }
         let profile = profile.postgres()?;
         bounded_metadata(
             async {

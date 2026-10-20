@@ -42,10 +42,19 @@ pub fn approve(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
 /// Metadata lookup hint only. The complete query still goes through `approve`
 /// after fresh relation/type/permission checks; this never authorizes SQL.
 pub fn postgres_relation(sql: &str) -> AppResult<Option<(String, String)>> {
+    relation(sql, &PostgreSqlDialect {})
+}
+
+pub fn mysql_relation(sql: &str) -> AppResult<Option<(String, String)>> {
+    check_mysql_syntax(sql)?;
+    relation(sql, &MySqlDialect {})
+}
+
+fn relation(sql: &str, dialect: &dyn Dialect) -> AppResult<Option<(String, String)>> {
     if sql.is_empty() || sql.len() > MAX_SQL_BYTES {
         return Err(AppError::policy("Use a query between 1 and 32,768 bytes."));
     }
-    let statements = Parser::new(&PostgreSqlDialect {})
+    let statements = Parser::new(dialect)
         .with_recursion_limit(32)
         .try_with_sql(sql)
         .and_then(|mut parser| parser.parse_statements())
@@ -80,17 +89,29 @@ pub fn postgres_relation(sql: &str) -> AppResult<Option<(String, String)>> {
             "Use a schema-qualified table name, for example public.orders.",
         ));
     }
-    Ok(Some((identifier(parts[0]), identifier(parts[1]))))
+    let name = |ident: &Ident| {
+        if dialect.is::<MySqlDialect>() {
+            ident.value.clone()
+        } else {
+            identifier(ident)
+        }
+    };
+    Ok(Some((name(parts[0]), name(parts[1]))))
 }
 
 pub fn approve_mysql(sql: &str, tables: &[TableInfo]) -> AppResult<ApprovedQuery> {
+    check_mysql_syntax(sql)?;
+    approve_dialect(sql, tables, &MySqlDialect {})
+}
+
+fn check_mysql_syntax(sql: &str) -> AppResult<()> {
     // Keep parsing independent of server SQL modes and executable comments.
     if sql.contains('\\') || sql.contains("/*") || sql.contains('"') {
         return Err(AppError::policy(
             "Use backticks for MySQL identifiers and plain single-quoted literals; backslashes and block comments are disabled.",
         ));
     }
-    approve_dialect(sql, tables, &MySqlDialect {})
+    Ok(())
 }
 
 fn approve_dialect(
@@ -150,8 +171,18 @@ fn approve_dialect(
                 .iter()
                 .find(|t| {
                     t.read_blocked_reason.is_none()
-                        && t.schema == identifier(parts[0])
-                        && t.name == identifier(parts[1])
+                        && t.schema
+                            == if dialect.is::<MySqlDialect>() {
+                                parts[0].value.clone()
+                            } else {
+                                identifier(parts[0])
+                            }
+                        && t.name
+                            == if dialect.is::<MySqlDialect>() {
+                                parts[1].value.clone()
+                            } else {
+                                identifier(parts[1])
+                            }
                 })
                 .ok_or_else(|| {
                     AppError::policy("This table is outside the approved base-table scope.")

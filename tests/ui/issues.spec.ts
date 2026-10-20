@@ -111,7 +111,10 @@ async function fixture(page: Page, engine: 'redis' | 'postgres' | 'mysql') {
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect database', exact: true }).click();
   await page.getByLabel('Database engine').selectOption(engine);
-  if (engine !== 'redis') await page.getByLabel('Database', { exact: true }).fill('fixture');
+  if (engine !== 'redis')
+    await page
+      .getByLabel(engine === 'mysql' ? 'Default database (optional)' : 'Database', { exact: true })
+      .fill('fixture');
   await page.getByLabel('Username', { exact: true }).fill('reader');
   await page.getByRole('button', { name: 'Connect securely', exact: true }).click();
 }

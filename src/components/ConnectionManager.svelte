@@ -118,7 +118,8 @@
           <span
             ><strong>{entry.info.name}{hasEdits(entry) ? ' •' : ''}</strong><small
               >{entry.saved?.group ? `${entry.saved.group} · ` : ''}{entry.info.host}:{entry.info
-                .port} / {entry.info.database} · {entry.info.username || 'default'}</small
+                .port} / {entry.info.database || 'All databases'} · {entry.info.username ||
+                'default'}</small
             ></span
           >
           <small>{entry.online ? 'Ready' : 'Disconnected'}</small>

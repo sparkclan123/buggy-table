@@ -281,7 +281,8 @@ test('engine selection sets defaults and restricts manual editing to PostgreSQL'
   await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Schema', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Allow manual cell edits')).toHaveCount(0);
-  await expect(page.getByText(/SELECT \/ SHOW VIEW grants only/)).toBeVisible();
+  await expect(page.getByText(/including administrator accounts/)).toBeVisible();
+  await expect(page.getByLabel('Default database (optional)')).not.toHaveAttribute('required');
   await page.getByLabel('Database engine').selectOption('redis');
   await expect(page.getByLabel('Port', { exact: true })).toHaveValue('6379');
   await expect(page.getByLabel('Database number', { exact: true })).toHaveValue('0');

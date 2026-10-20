@@ -34,9 +34,12 @@ impl RemoteProfile {
                 "MySQL and Redis connections are read-only in this release.",
             ));
         }
-        if [&r.name, &r.host, &r.database]
+        if [&r.name, &r.host]
             .iter()
             .any(|v| v.trim().is_empty() || v.len() > 253 || v.contains('\0'))
+            || (r.engine != Engine::Mysql && r.database.trim().is_empty())
+            || r.database.len() > 253
+            || r.database.contains('\0')
             || r.username.len() > 253
             || r.username.contains('\0')
             || password.len() > 4096
@@ -47,7 +50,7 @@ impl RemoteProfile {
         {
             return Err(AppError::new(
                 "INVALID_CONNECTION",
-                "Enter one host, a valid port and database; connection fields must be at most 253 bytes.",
+                "Enter one host and a valid port; connection fields must be at most 253 bytes. MySQL's default database is optional.",
             ));
         }
         if r.tls == TlsMode::LocalOnly && !r.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
@@ -74,7 +77,11 @@ impl RemoteProfile {
             name: r.name,
             host: r.host,
             port: r.port,
-            database: r.database,
+            database: if r.engine == Engine::Mysql && r.database.trim().is_empty() {
+                String::new()
+            } else {
+                r.database
+            },
             username: r.username,
             password,
             tls: r.tls,

@@ -49,7 +49,7 @@ open src-tauri/target/release/bundle/dmg
 
 เครื่อง Apple Silicon จะได้ตัวติดตั้ง ARM ส่วน Intel/Windows ให้ build บน GitHub Actions ตามหัวข้อถัดไป คำสั่งนี้ไม่เปิด updater และไม่ใช้ signing Secrets
 
-## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.14
+## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.15
 
 ใช้ Terminal บน Mac เครื่องนี้ ไม่ต้องรันบน Windows (workflow อยู่ใน branch `main` ):
 
@@ -59,7 +59,7 @@ source "$HOME/.nvm/nvm.sh"
 nvm use
 git switch main
 git pull --ff-only
-pnpm release:version 0.1.14
+pnpm release:version 0.1.15
 ```
 
 แก้ `docs/RELEASE_NOTES.md` ให้ตรงรุ่น แล้วตรวจและ commit:
@@ -68,11 +68,11 @@ pnpm release:version 0.1.14
 pnpm release:check
 pnpm check
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock docs/RELEASE_NOTES.md
-git commit -m "Prepare 0.1.14 preview"
+git commit -m "Prepare 0.1.15 preview"
 git push origin main
-git tag -a preview/v0.1.14 -m "buggy-table 0.1.14 preview"
-git push origin preview/v0.1.14
-gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.14
+git tag -a preview/v0.1.15 -m "buggy-table 0.1.15 preview"
+git push origin preview/v0.1.15
+gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.15
 gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 ```
 
@@ -80,24 +80,24 @@ gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 
 ```sh
 gh run watch RUN_ID --repo sparkclan123/buggy-table --exit-status
-gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.14
+gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.15
 ```
 
 ทำต่อเฉพาะเมื่อ **ทั้งสามแพลตฟอร์มสำเร็จ** แล้วรวบรวมไฟล์และ checksum:
 
 ```sh
-mkdir -p artifacts/release-v0.1.14
-cp artifacts/preview-v0.1.14/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.14/
-cp artifacts/preview-v0.1.14/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.14/
-cp artifacts/preview-v0.1.14/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.14/
-(cd artifacts/release-v0.1.14 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
-gh release create v0.1.14 artifacts/release-v0.1.14/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.14 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
+mkdir -p artifacts/release-v0.1.15
+cp artifacts/preview-v0.1.15/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.15/
+cp artifacts/preview-v0.1.15/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.15/
+cp artifacts/preview-v0.1.15/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.15/
+(cd artifacts/release-v0.1.15 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
+gh release create v0.1.15 artifacts/release-v0.1.15/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.15 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
 ```
 
 ตรวจไฟล์ใน draft และ release notes ต้องระบุว่า **ไม่มีใบรับรอง OS และไม่มี updater** แล้วจึงเผยแพร่:
 
 ```sh
-gh release edit v0.1.14 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
+gh release edit v0.1.15 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
 ```
 
 การเผยแพร่ทำให้ทุกคนดาวน์โหลดได้ ไม่แก้ทับไฟล์รุ่นที่เผยแพร่แล้ว หากแก้แอปให้ขึ้นเลขเวอร์ชันใหม่

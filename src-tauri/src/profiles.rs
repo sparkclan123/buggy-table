@@ -89,9 +89,8 @@ impl SavedConnection {
         if Uuid::parse_str(&self.id).is_err()
             || self.port == 0
             || self.group.len() > 100
-            || [&self.name, &self.host, &self.database]
-                .iter()
-                .any(|s| s.is_empty())
+            || [&self.name, &self.host].iter().any(|s| s.is_empty())
+            || (self.engine != Engine::Mysql && self.database.is_empty())
             || [
                 &self.name,
                 &self.host,
@@ -350,6 +349,21 @@ mod tests {
             None,
             "Tests".into(),
         )
+    }
+    #[test]
+    fn mysql_server_bookmark_survives_restart_without_a_default_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Profiles::new(dir.path().to_owned());
+        let mut p = fixture();
+        p.engine = Engine::Mysql;
+        p.database.clear();
+        p.schema.clear();
+        let saved = store.put(p).unwrap();
+        let restored = Profiles::new(dir.path().to_owned()).get(&saved.id).unwrap();
+        assert!(restored.database.is_empty());
+        let mut invalid = restored;
+        invalid.engine = Engine::Postgres;
+        assert!(store.put(invalid).is_err());
     }
     #[test]
     fn bookmarks_survive_restart_without_passwords_or_rows() {

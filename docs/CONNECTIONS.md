@@ -1,6 +1,16 @@
 # Connection workspaces
 
-Database คือชื่อฐานข้อมูลจริง ส่วน Schema มักเป็น `public` แต่ใช้ค่าอื่นได้ตามฐานข้อมูล ไม่จำเป็นต้องเป็นชื่อเดียวกัน
+สำหรับ PostgreSQL: Database คือชื่อฐานข้อมูลจริง ส่วน Schema มักเป็น `public` แต่ใช้ค่าอื่นได้ตามฐานข้อมูล ไม่จำเป็นต้องเป็นชื่อเดียวกัน
+
+## MySQL: เลือกฐานข้อมูลหลังเชื่อมต่อ — 0.1.14
+
+ช่อง **Default database (optional)** เว้นว่างได้ กรอก Host, Port, Username และ Password แล้วเชื่อมต่อ แอปจะแสดงฐานข้อมูลที่บัญชีมองเห็นในแถบซ้าย กด **+** หน้าชื่อเพื่อโหลดและขยายตาราง กด **−** เพื่อหุบ รายการที่โหลดแล้วใช้ซ้ำภายใน session; ปุ่ม refresh ข้างฐานข้อมูลโหลดตารางใหม่ ส่วนปุ่ม refresh ข้าง Databases โหลดรายชื่อฐานข้อมูลใหม่ Search ค้นชื่อฐานข้อมูลและตารางที่โหลดแล้ว
+
+ตารางชื่อเดียวกันในคนละฐานข้อมูลเปิดแยกแท็บได้ Browse, filters, counts และ indexes ยึดฐานข้อมูลของแท็บนั้น SQL ต้องใช้ชื่อแบบ `database.table` ถ้า Remember connection เปิดอยู่ สามารถบันทึก connection ที่ไม่มี default database และคืนแท็บเดิมหลัง reconnect ได้
+
+บัญชี admin และบัญชีที่มีสิทธิ์เขียนเชื่อมต่อได้ แต่ MySQL ในแอปยังอ่านอย่างเดียว ทุก operation เปิด read-only transaction และตรวจคำสั่ง SELECT ก่อนส่งไปเซิร์ฟเวอร์ Views, generated columns, storage engines และชนิดข้อมูลที่ยังอ่านไม่ได้จะแสดงโครงสร้างพร้อมเหตุผล ไม่ซ่อนตารางทั้งรายการ
+
+อ้างอิง: [MySQL default database is optional](https://dev.mysql.com/doc/refman/8.4/en/connecting.html), [read-only transactions](https://dev.mysql.com/doc/refman/8.4/en/commit.html)
 
 ## เวอร์ชัน PostgreSQL
 

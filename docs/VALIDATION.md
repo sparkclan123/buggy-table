@@ -240,3 +240,14 @@ Validation: 24 PostgreSQL integration cases on each of versions 15, 16, 17 and 1
 - Real two-VPN PostgreSQL integration passed after the process changes: private DNS, verified database TLS, reused queries, failed replacement preserving the prior session and independent VPN shutdown.
 - VPN UI cases: 16 passed across Chromium/WebKit. They include unavailable Docker → recheck → actionable failure → retry → ready, disabled setup controls while busy, per-connection behavior, keyboard switches and thumb bounds in both themes. Light/Dark screenshots were inspected at a 1000×700 viewport; sidebar status remains readable.
 - The existing 0.1.12 native app was opened only to inspect setup status and then closed with all saved databases offline. No production connection or user VPN profile was tested. The new UI tests use IPC doubles; real process/build and VPN tests are separate. Release CI and installer evidence are recorded in BUILD_INFO.txt.
+
+
+## MySQL database navigation — 0.1.14
+
+MySQL connections may omit the default database, including saved bookmarks. The sidebar loads accessible database names first, expands tables on demand and reuses each loaded catalog. Browse, count, indexes and SQL use the requested database independently; SQL still requires a qualified table name. Views and unsupported relations remain visible with a structure-only reason. Per-table metadata lookup avoids rescanning unrelated columns on every read.
+
+Unlike earlier previews, MySQL permits accounts with elevated privileges. SQL remains a reconstructed read-only subset and each dedicated connection begins a read-only transaction. Regression coverage includes reader, writer and root accounts, blocked mutation/indirection, server rejection of an UPDATE in the app's root transaction, privilege changes, permission-limited database discovery, same-name tables in two databases, counts/indexes, JSON, verified/private-CA TLS, explicit encrypted-only TLS and no plaintext fallback. These write-denial checks use disposable Compose fixtures only.
+
+Local validation: 28 Rust library tests passed with fixtures enabled, 12 MySQL/Redis integration tests passed, 12 frontend unit tests passed, and 24 focused Chromium/WebKit cases passed (database tree, retry/empty states, TLS and existing overview behavior). Svelte/TypeScript and release consistency checks passed. Final CI and packaged-installer results are recorded in BUILD_INFO.txt attached to the release. Browser tests use IPC doubles; do not interpret them as native Windows MySQL validation.
+
+Private endpoint diagnostics were performed only through ephemeral stdin without writing connection inputs to source, fixtures, bookmarks or logs. Public release materials contain no endpoint, account, database/table names or secrets from that diagnostic. No application row data was read or changed on that endpoint.

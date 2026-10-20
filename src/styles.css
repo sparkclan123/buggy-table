@@ -298,6 +298,59 @@ pre,
 .table-list button > svg {
   color: var(--table-icon);
 }
+.database-tree-heading,
+.database-node-heading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.database-tree-heading {
+  justify-content: space-between;
+  padding: 0 5px 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.database-tree-heading small {
+  margin-left: 3px;
+}
+.database-tree .database-toggle {
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+  padding: 6px 4px;
+  font-weight: 550;
+}
+.database-tree .database-toggle.current {
+  color: var(--text);
+}
+.database-tree button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.database-tree .database-refresh {
+  width: 24px;
+  min-width: 24px;
+  padding: 5px;
+  color: var(--muted);
+  opacity: 0.45;
+}
+.database-node-heading:hover .database-refresh,
+.database-refresh:focus-visible {
+  opacity: 1;
+}
+.database-tables {
+  margin: 0 0 5px 10px;
+  border-left: 1px solid var(--line);
+}
+.database-tables button {
+  gap: 5px;
+  padding-left: 13px;
+}
+.database-tables .sidebar-empty {
+  padding: 5px 10px;
+  margin: 0;
+}
 .sidebar-empty {
   padding: 10px;
   color: var(--muted);

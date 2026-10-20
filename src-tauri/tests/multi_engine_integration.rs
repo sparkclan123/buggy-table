@@ -68,8 +68,22 @@ async fn mysql_reads_metadata_filters_sort_and_exact_decimals() {
     let info = app.connect(request(Engine::Mysql)).await.unwrap();
     assert_eq!(info.engine, Engine::Mysql);
     assert!(!info.manual_edits);
-    assert_eq!(info.tables.len(), 1);
-    assert_eq!(info.tables[0].name, "items");
+    assert_eq!(info.tables.len(), 5);
+    assert!(
+        info.tables
+            .iter()
+            .any(|t| t.name == "items" && t.read_blocked_reason.is_none())
+    );
+    assert!(
+        info.tables
+            .iter()
+            .any(|t| t.name == "items_view" && t.read_blocked_reason.is_some())
+    );
+    assert!(
+        info.tables
+            .iter()
+            .any(|t| t.name == "generated_items" && t.read_blocked_reason.is_some())
+    );
     assert!(info.tables[0].columns.iter().all(|c| !c.editable));
     let result = app.browse(browse(&info.id)).await.unwrap();
     assert_eq!(result.rows.len(), 2);
@@ -245,7 +259,7 @@ async fn mysql_tls_fixture(mode: TlsMode, host: &str, trust: bool, succeeds: boo
     let result = app.connect(settings).await;
     if succeeds {
         let info = result.unwrap();
-        assert_eq!(info.tables[0].name, "items");
+        assert!(info.tables.iter().any(|t| t.name == "items"));
         app.disconnect(&info.id).await.unwrap();
     } else {
         assert_eq!(result.unwrap_err().code, "MYSQL_TLS");
@@ -258,51 +272,140 @@ async fn mysql_tls_fixture(mode: TlsMode, host: &str, trust: bool, succeeds: boo
 
 #[tokio::test]
 #[ignore = "requires local Compose fixtures"]
-async fn mysql_rejects_mutation_indirection_and_write_accounts() {
+async fn mysql_rejects_mutation_and_indirection_with_reader_and_admin_accounts() {
     let app = Workbench::default();
-    let info = app.connect(request(Engine::Mysql)).await.unwrap();
-    for sql in [
-        "DELETE FROM tablepor_test.items",
-        "TRUNCATE tablepor_test.items",
-        "SELECT SLEEP(1)",
-        "SELECT LOAD_FILE('/etc/passwd')",
-        "SELECT 1 INTO OUTFILE '/tmp/out'",
-        "SELECT @x:=1",
-        "SELECT * FROM tablepor_test.items FOR UPDATE",
-        "SELECT * FROM tablepor_test.items_view",
-        "SELECT 1; DELETE FROM tablepor_test.items",
-        "SELECT /*!50000 SLEEP(1) */ 1",
-        "CALL dangerous()",
-        "SELECT * FROM mysql.user",
-        "SELECT 'a\\'; DELETE FROM tablepor_test.items --'",
+    for (username, password) in [
+        ("tablepor_reader", "local-mysql-reader"),
+        ("tablepor_writer", "local-mysql-writer"),
+        ("root", "local-mysql-admin"),
     ] {
+        let mut r = request(Engine::Mysql);
+        r.username = username.into();
+        r.password = password.into();
+        let info = app.connect(r).await.unwrap();
+        for sql in [
+            "DELETE FROM tablepor_test.items",
+            "TRUNCATE tablepor_test.items",
+            "SELECT SLEEP(1)",
+            "SELECT LOAD_FILE('/etc/passwd')",
+            "SELECT 1 INTO OUTFILE '/tmp/out'",
+            "SELECT @x:=1",
+            "SELECT * FROM tablepor_test.items FOR UPDATE",
+            "SELECT * FROM tablepor_test.items_view",
+            "SELECT 1; DELETE FROM tablepor_test.items",
+            "SELECT /*!50000 SLEEP(1) */ 1",
+            "CALL dangerous()",
+            "SELECT 'a\\'; DELETE FROM tablepor_test.items --'",
+        ] {
+            assert_eq!(
+                app.query(query(&info.id, sql)).await.unwrap_err().code,
+                "POLICY_DENIED",
+                "{sql}"
+            );
+        }
         assert_eq!(
-            app.query(query(&info.id, sql)).await.unwrap_err().code,
-            "POLICY_DENIED",
-            "{sql}"
+            app.save(SaveRequest {
+                schema: None,
+                connection_id: info.id.clone(),
+                request_id: Uuid::new_v4().to_string(),
+                table: "items".into(),
+                rows: vec![]
+            })
+            .await
+            .unwrap_err()
+            .code,
+            "POLICY_DENIED"
         );
+        let mut r = browse(&info.id);
+        r.sort_column = Some("id; DELETE FROM items".into());
+        assert_eq!(app.browse(r).await.unwrap_err().code, "POLICY_DENIED");
+        assert_eq!(app.browse(browse(&info.id)).await.unwrap().rows.len(), 2);
+        app.disconnect(&info.id).await.unwrap();
     }
+}
+
+#[tokio::test]
+#[ignore = "requires local Compose fixtures"]
+async fn mysql_server_connection_selects_databases_per_operation_without_reconnecting() {
+    let app = Workbench::default();
     let mut r = request(Engine::Mysql);
-    r.username = "tablepor_writer".into();
-    r.password = "local-mysql-writer".into();
-    assert_eq!(app.connect(r).await.unwrap_err().code, "POLICY_DENIED");
+    r.database.clear();
+    let info = app.connect(r).await.unwrap();
+    assert!(info.database.is_empty() && info.tables.is_empty());
+    let names = app.schemas(&info.id).await.unwrap();
+    assert!(names.contains(&"tablepor_test".into()));
+    assert!(names.contains(&"other_database".into()));
+    assert!(!names.contains(&"private_database".into()));
     assert_eq!(
-        app.save(SaveRequest {
-            schema: None,
-            connection_id: info.id.clone(),
-            request_id: Uuid::new_v4().to_string(),
-            table: "items".into(),
-            rows: vec![]
-        })
+        app.browse(browse(&info.id)).await.unwrap_err().code,
+        "MYSQL_DATABASE_REQUIRED"
+    );
+    for (schema, expected) in [
+        ("tablepor_test", "2"),
+        ("other_database", "99"),
+        ("tablepor_test", "2"),
+    ] {
+        let tables = app.schema_tables(&info.id, schema).await.unwrap();
+        assert!(tables.iter().all(|t| t.schema == schema));
+        let mut b = browse(&info.id);
+        b.schema = Some(schema.into());
+        let result = app.browse(b).await.unwrap();
+        assert_eq!(result.rows[0][0].as_deref(), Some(expected));
+        let mut b = browse(&info.id);
+        b.schema = Some(schema.into());
+        let count = app.count(b).await.unwrap();
+        assert_eq!(
+            count.rows,
+            if schema == "other_database" { "1" } else { "2" }
+        );
+        let indexes = app
+            .indexes_in_schema(&info.id, "items", Some(schema))
+            .await
+            .unwrap();
+        assert!(indexes.iter().any(|i| i.name
+            == if schema == "other_database" {
+                "other_label_idx"
+            } else {
+                "items_label_idx"
+            }));
+    }
+    let sql = app
+        .query(query(&info.id, "SELECT * FROM other_database.items"))
+        .await
+        .unwrap();
+    assert_eq!(sql.rows[0][0].as_deref(), Some("99"));
+    let json = app
+        .query(query(
+            &info.id,
+            "SELECT payload FROM tablepor_test.json_items",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(json.rows[0][0].as_ref().unwrap()).unwrap()["nested"]
+            [1],
+        2
+    );
+    assert!(
+        app.schema_tables(&info.id, "private_database")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut denied = browse(&info.id);
+    denied.schema = Some("private_database".into());
+    assert_eq!(app.browse(denied).await.unwrap_err().code, "POLICY_DENIED");
+    assert_eq!(
+        app.query(query(
+            &info.id,
+            "SELECT * FROM tablepor_test.generated_items"
+        ))
         .await
         .unwrap_err()
         .code,
         "POLICY_DENIED"
     );
-    let mut r = browse(&info.id);
-    r.sort_column = Some("id; DELETE FROM items".into());
-    assert_eq!(app.browse(r).await.unwrap_err().code, "POLICY_DENIED");
-    assert_eq!(app.browse(browse(&info.id)).await.unwrap().rows.len(), 2);
+    app.disconnect(&info.id).await.unwrap();
 }
 
 async fn seed_redis() {
@@ -529,7 +632,7 @@ async fn redis_rejects_oversized_collection_before_full_response_is_buffered() {
 
 #[tokio::test]
 #[ignore = "requires local Compose fixtures"]
-async fn mysql_server_denies_writes_and_app_detects_privilege_drift() {
+async fn mysql_server_denies_reader_writes_and_app_stays_read_only_after_privilege_changes() {
     use mysql_async::{Conn, OptsBuilder, prelude::Queryable};
     let opts = OptsBuilder::default()
         .ip_or_hostname("127.0.0.1")
@@ -558,12 +661,19 @@ async fn mysql_server_denies_writes_and_app_detects_privilege_drift() {
         .await
         .unwrap();
     let result = app.browse(browse(&info.id)).await;
+    let denied = app
+        .query(query(
+            &info.id,
+            "UPDATE tablepor_test.items SET label='forbidden' WHERE id=1",
+        ))
+        .await;
     // Restore the synthetic account before asserting, even if the policy fails.
     admin
         .query_drop("REVOKE UPDATE ON tablepor_test.items FROM 'tablepor_reader'@'%'")
         .await
         .unwrap();
-    assert_eq!(result.unwrap_err().code, "POLICY_DENIED");
+    assert_eq!(result.unwrap().rows.len(), 2);
+    assert_eq!(denied.unwrap_err().code, "POLICY_DENIED");
     assert_eq!(
         app.browse(browse(&info.id)).await.unwrap().rows[1][1].as_deref(),
         Some("First")
