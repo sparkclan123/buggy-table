@@ -310,7 +310,7 @@ mod tests {
                 owner: owner.clone(),
                 id: None,
                 name: "Office".into(),
-                config: Some(CONFIG.into()),
+                config: Some(format!("{CONFIG}push-peer-info\n")),
                 username: "user".into(),
                 password: Some("PASSWORD_CANARY".into()),
                 key_password: None,
@@ -329,6 +329,15 @@ mod tests {
         assert_eq!(
             restarted.load(&owner, &p.id).unwrap().1.password,
             "PASSWORD_CANARY"
+        );
+        assert!(
+            restarted
+                .load(&owner, &p.id)
+                .unwrap()
+                .1
+                .config
+                .lines()
+                .any(|line| line == "push-peer-info")
         );
         restarted
             .put(VpnEdit {
@@ -367,6 +376,40 @@ mod tests {
         assert_eq!(before, fs::read(&store.path).unwrap());
         restarted.remove(&owner, &p.id).unwrap();
         assert!(restarted.list(&owner).unwrap().is_empty());
+    }
+    #[test]
+    fn peer_info_profiles_are_imported_without_dropping_the_option() {
+        for directive in [
+            "push-peer-info",
+            "--push-peer-info",
+            "  push-peer-info  ",
+            "push-peer-info # exported client metadata",
+        ] {
+            // Include Windows line endings and a BOM as found in exported profiles.
+            let input = format!("\u{feff}{CONFIG}{directive}\n").replace('\n', "\r\n");
+            let validated = validate_config(&input).unwrap();
+            assert!(
+                validated.lines().any(|line| line == directive.trim()),
+                "{directive}"
+            );
+            assert!(validated.contains("remote-cert-tls server\n"));
+        }
+    }
+    #[test]
+    fn peer_info_does_not_accept_arguments_or_bypass_profile_restrictions() {
+        for option in [
+            "push-peer-info unexpected",
+            "--push-peer-info unexpected",
+            "push-peer-info\nup /tmp/evil",
+            "push-peer-info\nplugin malicious.so",
+            "push-peer-info\nconfig other.ovpn",
+            "push-peer-info\nca /etc/secret",
+        ] {
+            assert!(
+                validate_config(&format!("{CONFIG}{option}\n")).is_err(),
+                "{option}"
+            );
+        }
     }
     #[test]
     fn unsafe_or_unsupported_profiles_are_rejected() {

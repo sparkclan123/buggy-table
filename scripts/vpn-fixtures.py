@@ -36,7 +36,7 @@ def main():
         run('docker', 'run', '-d', '--rm', '--name', name, '--cap-add=NET_ADMIN', '--device=/dev/net/tun', '-e', 'POSTGRES_PASSWORD=disposable-fixture-admin', '-e', 'POSTGRES_DB=fixture', '-v', f'{OUT}:/fixtures:ro', '-v', f'{ROOT / "tests/vpn/init.sql"}:/docker-entrypoint-initdb.d/init.sql:ro', 'buggy-table-vpn-fixture')
         info = json.loads(run('docker', 'inspect', name, capture_output=True).stdout)[0]
         address = info['NetworkSettings']['Networks']['bridge']['IPAddress']
-        config = f'client\ndev tun\nproto udp\nremote {address} 1194\nnobind\nremote-cert-tls server\n'
+        config = f'client\ndev tun\nproto udp\nremote {address} 1194\nnobind\nremote-cert-tls server\npush-peer-info\n'
         for tag, filename in [('ca', 'ca.crt'), ('cert', 'client.crt'), ('key', 'client.key')]:
             config += f'<{tag}>\n' + (OUT / filename).read_text() + f'</{tag}>\n'
         (OUT / f'client-{i}.ovpn').write_text(config)

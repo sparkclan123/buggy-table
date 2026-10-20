@@ -1,24 +1,23 @@
-buggy-table 0.1.11 — Preview
+buggy-table 0.1.12 — Preview
 
-Use a separate OpenVPN connection for each database, with saved profiles, network health checks and reconnect controls.
+Fix importing OpenVPN profiles containing `push-peer-info`.
 
 ## Changes
 
-- Compact VPN switch and settings beside each database connection, including the new-connection form and connection manager.
-- Import inline `.ovpn` client profiles, add/remove/rename them, and choose a default independently for each database. The enabled/default preference is saved with the local connection bookmark.
-- When enabled, connect OpenVPN before connecting the database. Each active database owns an isolated Linux container, so different VPNs can use overlapping private hostnames and IP ranges without replacing the computer's routes or DNS.
-- Show VPN state and the last route check. **Test route** checks private DNS/TCP reachability to the database port and reports latency; it does not run SQL or prove database authentication. **Reconnect** refreshes that database's VPN and database session.
-- Reuse the running VPN for subsequent queries. Status polling reads local state without issuing extra SQL. A failed VPN never falls back to the device network. Direct connections do not require Docker.
-- Keep database TLS verification against the original database hostname. Encrypt VPN configuration/private keys/passwords locally using a key in the system credential store. Stored VPN secrets are not sent back to the UI.
-- Preserve the existing workspace if network replacement fails, and require saving/discarding pending edits before a network change or reconnect. VPN servers may independently restrict concurrent use of the same client certificate.
+- Fix a profile-import bug in 0.1.11: the app rejected the standard OpenVPN `push-peer-info` directive before attempting a VPN connection. Import now accepts and preserves it, including `--push-peer-info`, commented lines, and Windows-exported files with CRLF/BOM. You do not need to remove the directive from your `.ovpn`.
+- Explain unsupported options accurately instead of suggesting that every rejected option is a script, plugin or external file reference.
+- Validate that `push-peer-info` has no arguments; restrictions on imported scripts, plugins and external files remain enforced.
+- Add regression coverage for encrypted profile save/reload and real OpenVPN/PostgreSQL connections using profiles with `push-peer-info`.
+
+Includes the per-database VPN switches, saved profiles/defaults, status, **Test route** and **Reconnect** introduced in 0.1.11. Each enabled database uses an isolated Docker network; normal connections use the device network. VPN sessions are reused, database TLS keeps the original hostname, and a failed VPN never falls back to a direct connection.
 
 ## VPN requirements and limits
 
 Install and start **Docker Desktop with Linux containers** and use a local Docker context. First use downloads/builds the runtime and may take several minutes; Prepare in VPN settings can do this in advance. Later sessions reuse the image. No Docker installation is needed for connections with VPN disabled.
 
-Supported: OpenVPN TUN profiles with inline CA/certificates/keys, username/password authentication and encrypted private-key passwords. Use the database's private hostname/IP; add VPN DNS IPs if the server does not supply them. TAP, external certificate/key files, `<connection>` blocks, user scripts/plugins, browser SSO and interactive MFA/challenges are not supported. Disconnect before editing/removing a profile currently in use. See the [connection guide](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.11/docs/CONNECTIONS.md).
+Supported: OpenVPN TUN profiles with inline CA/certificates/keys, username/password authentication and encrypted private-key passwords. Use the database's private hostname/IP; add VPN DNS IPs if the server does not supply them. TAP, external certificate/key files, `<connection>` blocks, user scripts/plugins, browser SSO and interactive MFA/challenges are not supported. Disconnect before editing/removing a profile currently in use. See the [connection guide](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.12/docs/CONNECTIONS.md).
 
-Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATION.md](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.11/docs/VALIDATION.md). Browser cases use IPC doubles; real isolated OpenVPN/PostgreSQL fixtures verify separate networks, private DNS, TLS identity and failure isolation. External user VPN profiles and native Windows VPN operation have not been independently verified. MySQL and Redis retain their existing read-only policies.
+Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATION.md](https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.12/docs/VALIDATION.md). Browser cases use IPC doubles; real isolated OpenVPN/PostgreSQL fixtures verify separate networks, private DNS, TLS identity and failure isolation. External user VPN profiles and native Windows VPN operation have not been independently verified. MySQL and Redis retain their existing read-only policies.
 
 ## Install or replace an older preview
 
@@ -26,9 +25,9 @@ Validation and installer provenance are recorded in BUILD_INFO.txt and [VALIDATI
 
 | Platform | Installer |
 |---|---|
-| Mac Apple Silicon (M series) | `buggy-table_0.1.11_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.11_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.11_x64-setup.exe` |
+| Mac Apple Silicon (M series) | `buggy-table_0.1.12_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.12_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.12_x64-setup.exe` |
 
 On Mac, open the DMG and drag buggy-table into Applications, replacing the old app. On Windows, run the installer using the existing installation location. Checksums are provided in SHA256SUMS.txt; build provenance is in BUILD_INFO.txt.
 

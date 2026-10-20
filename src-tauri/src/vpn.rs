@@ -117,6 +117,8 @@ pub fn validate_config(config: &str) -> AppResult<String> {
         "auth",
         "auth-user-pass",
         "auth-nocache",
+        // Client metadata used by some servers; no scripts or file access.
+        "push-peer-info",
         "cipher",
         "data-ciphers",
         "data-ciphers-fallback",
@@ -226,9 +228,15 @@ pub fn validate_config(config: &str) -> AppResult<String> {
                 return Err(failure(
                     "VPN_CONFIG",
                     &format!(
-                        "Unsupported OpenVPN option: {}. Use an inline client profile without scripts, plugins or external files.",
+                        "Unsupported OpenVPN option: {}. This option is not supported by this app. Check the VPN profile compatibility guide.",
                         option.chars().take(60).collect::<String>()
                     ),
+                ));
+            }
+            if option == "push-peer-info" && words.len() != 1 {
+                return Err(failure(
+                    "VPN_CONFIG",
+                    "OpenVPN option push-peer-info does not accept arguments.",
                 ));
             }
             if option == "auth-user-pass" && words.len() != 1 {
