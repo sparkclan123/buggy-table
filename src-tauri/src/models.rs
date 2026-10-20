@@ -78,6 +78,10 @@ pub struct ColumnInfo {
     pub primary_key: bool,
     #[serde(default)]
     pub editable: bool,
+    #[serde(default)]
+    pub insertable: bool,
+    #[serde(default)]
+    pub has_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +93,8 @@ pub struct TableInfo {
     pub estimated_rows: Option<i64>,
     #[serde(default)]
     pub deletable: bool,
+    #[serde(default)]
+    pub insertable: bool,
     #[serde(default)]
     pub relation_kind: String,
     #[serde(default)]
@@ -266,6 +272,8 @@ pub struct SaveRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RowChange {
     #[serde(default)]
+    pub insert: bool,
+    #[serde(default)]
     pub delete: bool,
     pub original: std::collections::BTreeMap<String, Option<String>>,
     pub changes: std::collections::BTreeMap<String, Option<String>>,
@@ -274,6 +282,7 @@ pub struct RowChange {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
+    pub inserted_rows: usize,
     pub updated_rows: usize,
     pub deleted_rows: usize,
 }

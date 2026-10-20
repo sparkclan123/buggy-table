@@ -120,11 +120,14 @@ impl Drop for Database {
 }
 
 pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
-    let tls = SslOpts::default().with_root_certs(if p.root_ca_pem.is_empty() {
-        vec![]
-    } else {
-        vec![p.root_ca_pem.as_bytes().to_vec().into()]
-    });
+    let tls = SslOpts::default()
+        .with_danger_accept_invalid_certs(p.tls == TlsMode::Require)
+        .with_danger_skip_domain_validation(p.tls == TlsMode::Require)
+        .with_root_certs(if p.root_ca_pem.is_empty() {
+            vec![]
+        } else {
+            vec![p.root_ca_pem.as_bytes().to_vec().into()]
+        });
     let opts = OptsBuilder::default()
         .ip_or_hostname(&p.host)
         .tcp_port(p.port)
@@ -134,8 +137,12 @@ pub async fn open(p: &RemoteProfile) -> AppResult<Database> {
         .prefer_socket(false)
         .enable_cleartext_plugin(false)
         .max_allowed_packet(Some(MAX_RESULT_BYTES))
-        .ssl_opts((p.tls == TlsMode::VerifyFull).then_some(tls));
-    let mut conn = Database(Some(Conn::new(opts).await.map_err(db_error)?));
+        .ssl_opts((p.tls != TlsMode::LocalOnly).then_some(tls));
+    let mut conn = Database(Some(Conn::new(opts).await.map_err(|error| {
+        if p.tls == TlsMode::Require && matches!(error, mysql_async::Error::Io(mysql_async::IoError::Tls(_))) {
+            AppError::new("MYSQL_TLS", "MySQL TLS handshake failed. Check the server TLS configuration and whether a client certificate is required. Plaintext fallback is disabled.")
+        } else { db_error(error) }
+    })?));
     let version: String = conn
         .query_first("SELECT VERSION()")
         .await
@@ -224,6 +231,7 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
                 ));
             }
             tables.push(TableInfo {
+                insertable: false,
                 deletable: false,
                 relation_kind: "table".into(),
                 read_blocked_reason: None,
@@ -237,6 +245,8 @@ pub async fn tables(conn: &mut Conn, schema: &str) -> AppResult<Vec<TableInfo>> 
             });
         }
         tables.last_mut().unwrap().columns.push(ColumnInfo {
+            insertable: false,
+            has_default: false,
             type_schema: String::new(),
             name: row.get(2).unwrap_or_default(),
             data_type: ty,

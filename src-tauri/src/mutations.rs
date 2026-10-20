@@ -40,7 +40,57 @@ impl Database {
         }
         let mut seen = BTreeSet::new();
         let mut deleted_rows = 0;
+        let mut inserted_rows = 0;
         for row in &request.rows {
+            if row.insert {
+                if !table.insertable {
+                    return Err(AppError::policy(
+                        "Inserting requires INSERT permission on a supported base table with a primary key.",
+                    ));
+                }
+                let mut names = Vec::new();
+                let mut expressions = Vec::new();
+                let mut values = Vec::new();
+                for (name, value) in &row.changes {
+                    let column = table.columns.iter().find(|c| c.name == *name && c.insertable)
+                        .ok_or_else(|| AppError::policy("A new-row column is generated or lacks INSERT permission. Reload the table."))?;
+                    if value.is_none() && !column.nullable {
+                        return Err(AppError::policy("A required column cannot be set to NULL."));
+                    }
+                    names.push(quote_identifier(name));
+                    values.push(value.clone());
+                    expressions.push(format!(
+                        "${}::pg_catalog.text::{}",
+                        values.len(),
+                        column_type_sql(column)
+                    ));
+                }
+                let sql = if names.is_empty() {
+                    format!("INSERT INTO {table_sql} DEFAULT VALUES")
+                } else {
+                    format!(
+                        "INSERT INTO {table_sql} ({}) VALUES ({})",
+                        names.join(", "),
+                        expressions.join(", ")
+                    )
+                };
+                let params: Vec<&(dyn ToSql + Sync)> =
+                    values.iter().map(|v| v as &(dyn ToSql + Sync)).collect();
+                if self
+                    .client
+                    .execute(&sql, &params)
+                    .await
+                    .map_err(query_error)?
+                    != 1
+                {
+                    return Err(AppError::new(
+                        "EDIT_CONFLICT",
+                        "An insert did not create exactly one row. No edits in this save were committed.",
+                    ));
+                }
+                inserted_rows += 1;
+                continue;
+            }
             if row.delete && !table.deletable {
                 return Err(AppError::policy(
                     "Deleting requires DELETE permission on a supported base table with a primary key.",
@@ -134,8 +184,9 @@ impl Database {
         self.client.batch_execute("COMMIT").await.map_err(|_| AppError::new(
             "SAVE_UNCERTAIN", "The commit response was lost or rejected. Reload the table to check the database before editing again."))?;
         Ok(SaveResult {
-            updated_rows: request.rows.len() - deleted_rows,
+            updated_rows: request.rows.len() - deleted_rows - inserted_rows,
             deleted_rows,
+            inserted_rows,
         })
     }
 }
@@ -154,10 +205,13 @@ fn validate_size(request: &SaveRequest) -> AppResult<()> {
         || request.rows.len() > 100
         || cells > 500
         || bytes > 4 * 1024 * 1024
-        || request
-            .rows
-            .iter()
-            .any(|r| r.delete != r.changes.is_empty())
+        || request.rows.iter().any(|r| {
+            if r.insert {
+                r.delete || !r.original.is_empty()
+            } else {
+                r.delete != r.changes.is_empty()
+            }
+        })
     {
         return Err(AppError::new(
             "EDIT_LIMIT",

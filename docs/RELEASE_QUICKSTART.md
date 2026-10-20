@@ -1,18 +1,18 @@
 # รัน buggy-table และปล่อยรุ่นทดสอบ
 
-รุ่น `v0.1.9` เพิ่มแถวสลับสีใน Data และ Row details, ลากจัดลำดับแท็บ, scrollbar แท็บบาง 3 px, ปุ่มรีเฟรช schema แบบไอคอน, ไอคอนตารางสีฟ้า และเริ่มต้น 100 แถวต่อหน้า ปุ่ม Updates เปิดหน้าดาวน์โหลด GitHub มี Mac Apple Silicon, Mac Intel และ Windows x64 รุ่นนี้ยังเป็น **Pre-release** ไม่มี Apple Developer ID/notarization, Windows Authenticode และต้องติดตั้งทับเอง
+รุ่น `v0.1.10` เพิ่ม Undo/Redo งานที่ยังไม่ Save, คัดลอกแถวด้วย Cmd/Ctrl+C แล้ว Cmd/Ctrl+V, ช่องแก้ไขข้อความยาวที่ขยายได้, Cmd/Ctrl+Enter รัน SQL, ลูกกลิ้งเมาส์เลื่อนแท็บ และตัวเลือก MySQL TLS แบบเข้ารหัสโดยไม่ตรวจใบรับรองที่ต้องเลือกเอง มี Mac Apple Silicon, Mac Intel และ Windows x64 รุ่นนี้ยังเป็น **Pre-release** ไม่มี Apple Developer ID/notarization, Windows Authenticode และต้องติดตั้งทับเอง
 
-ดาวน์โหลดที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.9
+ดาวน์โหลดที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.10
 
 | เครื่อง | ไฟล์ |
 |---|---|
-| Mac Apple Silicon (M series) | `buggy-table_0.1.9_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.9_x64.dmg` |
-| Windows x64 | ยังรอ build จาก GitHub Actions; ใช้ 0.1.8 ระหว่างนี้ |
+| Mac Apple Silicon (M series) | `buggy-table_0.1.10_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.10_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.10_x64-setup.exe` |
 
-ไฟล์ Mac 0.1.9 build และตรวจในเครื่องแล้ว ส่วน Windows และ CI ยังรอคิวเพราะ [GitHub Actions ขัดข้อง](https://www.githubstatus.com/incidents/8tzbpcnl75jp) ติดตาม [installer run](https://github.com/sparkclan123/buggy-table/actions/runs/39284299677) และตรวจไฟล์ก่อนเผยแพร่ Windows เพิ่ม ห้ามเปลี่ยนชื่อไฟล์ 0.1.8 เป็น 0.1.9
+การคัดลอกเพิ่มแถวรองรับ PostgreSQL ในโหมด manual edits ที่มี Primary key และสิทธิ์ INSERT เท่านั้น MySQL และ Redis ยังอ่านอย่างเดียว รายละเอียดการตรวจและแหล่ง build อยู่ใน BUILD_INFO.txt ของแต่ละ release
 
-**รุ่น 0.1.4–0.1.9 ปิด updater ไว้** ผู้ใช้ต้องดาวน์โหลดติดตั้งทับด้วยตนเอง การเผยแพร่ release ไม่สามารถเปิด updater ในแอปที่ติดตั้งไปแล้ว ก่อนติดตั้งให้บันทึกหรือยกเลิกงานค้างและปิดแอป Windows ให้รัน installer และเลือกตำแหน่งติดตั้งเดิม
+**รุ่น 0.1.4–0.1.10 ปิด updater ไว้** ผู้ใช้ต้องดาวน์โหลดติดตั้งทับด้วยตนเอง การเผยแพร่ release ไม่สามารถเปิด updater ในแอปที่ติดตั้งไปแล้ว ก่อนติดตั้งให้บันทึกหรือยกเลิกงานค้างและปิดแอป Windows ให้รัน installer และเลือกตำแหน่งติดตั้งเดิม
 
 ผู้ใช้ทั่วไปไม่ต้องลง Rust หรือ Node.js บน Mac ให้เปิด DMG แล้วลาก buggy-table ไป Applications แทนตัวเก่า โดยไม่ลบโฟลเดอร์ข้อมูลแอป ค่าการเชื่อมต่อเดิมยังอยู่
 
@@ -49,7 +49,7 @@ open src-tauri/target/release/bundle/dmg
 
 เครื่อง Apple Silicon จะได้ตัวติดตั้ง ARM ส่วน Intel/Windows ให้ build บน GitHub Actions ตามหัวข้อถัดไป คำสั่งนี้ไม่เปิด updater และไม่ใช้ signing Secrets
 
-## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.10
+## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.11
 
 ใช้ Terminal บน Mac เครื่องนี้ ไม่ต้องรันบน Windows (workflow อยู่ใน branch `main` ):
 
@@ -59,7 +59,7 @@ source "$HOME/.nvm/nvm.sh"
 nvm use
 git switch main
 git pull --ff-only
-pnpm release:version 0.1.10
+pnpm release:version 0.1.11
 ```
 
 แก้ `docs/RELEASE_NOTES.md` ให้ตรงรุ่น แล้วตรวจและ commit:
@@ -68,11 +68,11 @@ pnpm release:version 0.1.10
 pnpm release:check
 pnpm check
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock docs/RELEASE_NOTES.md
-git commit -m "Prepare 0.1.10 preview"
+git commit -m "Prepare 0.1.11 preview"
 git push origin main
-git tag -a preview/v0.1.10 -m "buggy-table 0.1.10 preview"
-git push origin preview/v0.1.10
-gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.10
+git tag -a preview/v0.1.11 -m "buggy-table 0.1.11 preview"
+git push origin preview/v0.1.11
+gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.11
 gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 ```
 
@@ -80,24 +80,24 @@ gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 
 ```sh
 gh run watch RUN_ID --repo sparkclan123/buggy-table --exit-status
-gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.10
+gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.11
 ```
 
 ทำต่อเฉพาะเมื่อ **ทั้งสามแพลตฟอร์มสำเร็จ** แล้วรวบรวมไฟล์และ checksum:
 
 ```sh
-mkdir -p artifacts/release-v0.1.10
-cp artifacts/preview-v0.1.10/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.10/
-cp artifacts/preview-v0.1.10/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.10/
-cp artifacts/preview-v0.1.10/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.10/
-(cd artifacts/release-v0.1.10 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
-gh release create v0.1.10 artifacts/release-v0.1.10/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.10 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
+mkdir -p artifacts/release-v0.1.11
+cp artifacts/preview-v0.1.11/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.11/
+cp artifacts/preview-v0.1.11/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.11/
+cp artifacts/preview-v0.1.11/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.11/
+(cd artifacts/release-v0.1.11 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
+gh release create v0.1.11 artifacts/release-v0.1.11/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.11 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
 ```
 
 ตรวจไฟล์ใน draft และ release notes ต้องระบุว่า **ไม่มีใบรับรอง OS และไม่มี updater** แล้วจึงเผยแพร่:
 
 ```sh
-gh release edit v0.1.10 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
+gh release edit v0.1.11 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
 ```
 
 การเผยแพร่ทำให้ทุกคนดาวน์โหลดได้ ไม่แก้ทับไฟล์รุ่นที่เผยแพร่แล้ว หากแก้แอปให้ขึ้นเลขเวอร์ชันใหม่

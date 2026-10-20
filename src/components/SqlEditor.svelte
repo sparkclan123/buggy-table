@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Compartment, EditorState } from '@codemirror/state';
+  import { Compartment, EditorState, Prec } from '@codemirror/state';
   import { EditorView, keymap } from '@codemirror/view';
   import { basicSetup } from 'codemirror';
   import { sql, PostgreSQL, MySQL } from '@codemirror/lang-sql';
@@ -32,15 +32,17 @@
           basicSetup,
           appearance.of(editorTheme()),
           sql({ dialect: engine === 'mysql' ? MySQL : PostgreSQL, schema }),
-          keymap.of([
-            {
-              key: 'Mod-Enter',
-              run: () => {
-                onrun();
-                return true;
+          Prec.highest(
+            keymap.of([
+              {
+                key: 'Mod-Enter',
+                run: () => {
+                  onrun();
+                  return true;
+                },
               },
-            },
-          ]),
+            ]),
+          ),
           EditorView.contentAttributes.of({
             'aria-label': 'SQL query editor',
             spellcheck: 'false',

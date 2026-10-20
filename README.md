@@ -9,14 +9,17 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - เลือก PostgreSQL / MySQL / Redis ในหน้าต่อฐานข้อมูล พร้อม port เริ่มต้นตามชนิด
 - MySQL: ตารางหลายแท็บ, filter/sort, SQL SELECT, EXPLAIN, structure, indexes และ overview; ต้องใช้บัญชี SELECT/SHOW VIEW เท่านั้น
 - Redis: SCAN คีย์ตาม pattern, ดูค่า/ชนิด/TTL, อ่าน string/hash/list/set/sorted set และรันคำสั่งอ่านแบบ JSON arguments
-- เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว
+- เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL และ MySQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว
 - เปิดหลายตารางเป็นแท็บด้านบน เก็บ filter, page, SQL, scroll และ pending edits แยกกัน
 - คลิกเซลล์ครั้งแรกเลือกและไฮไลต์ทั้งแถว คลิกเซลล์ในแถวที่เลือกอีกครั้งจึงแก้ไขได้: Enter จบการแก้ไข, Escape คืนค่าก่อนแก้, Shift+Enter ขึ้นบรรทัดใหม่; Save changes หรือ Cmd/Ctrl+S เพื่อบันทึก และ Discard เพื่อยกเลิก
+- Cmd/Ctrl+Z ย้อนการแก้เซลล์ การเตรียมลบ หรือเพิ่มแถวที่ยังไม่ Save; Shift+Cmd/Ctrl+Z ทำซ้ำ ประวัติแยกแต่ละแท็บ จำกัด 100 ขั้น/8 MiB และล้างเมื่อ Save, Discard หรือโหลดข้อมูลใหม่
+- เลือกแถวแล้ว Cmd/Ctrl+C และ Cmd/Ctrl+V ในตารางเดิม เพื่อเพิ่มสำเนาไว้ท้ายหน้าปัจจุบันเป็น draft สีเหลือง ต้อง Save จึงเขียนลง PostgreSQL; ไม่คัดลอก Primary key หรือ generated/identity columns ช่อง DEFAULT ให้ฐานข้อมูลสร้างค่า ส่วน Required ต้องกรอกเอง ต้องมีสิทธิ์ INSERT; copy/paste ภายในช่องพิมพ์ยังเป็นการคัดลอกข้อความตามปกติ
+- ช่องแก้ไขข้อความยาวขยายเป็นกล่องหลายบรรทัดพร้อม scrollbar บาง โดยยังใช้ Enter/Escape และ Shift+Enter ได้
 - ลากขอบหัวคอลัมน์เพื่อปรับความกว้าง ดับเบิลคลิกขอบเพื่อคืนขนาดเดิม หรือโฟกัสขอบแล้วกดลูกศรซ้าย/ขวา
 - คลิกหัวคอลัมน์เพื่อ sort ASC/DESC จากฐานข้อมูลก่อนแบ่งหน้า; เก็บความกว้างและการเรียงแยกตามแท็บ
 - เพิ่ม/ลบ filter ได้สูงสุด 20 เงื่อนไข เลือก AND/OR แล้ว Apply filters
 - Cmd+R บน Mac, Ctrl+R บน Windows หรือ F5 รีเฟรชข้อมูลตาราง โดยไม่รีโหลดทั้งแอป; ถ้ามีค่ารอ Save จะเตือนก่อน
-- Save เป็น transaction เดียว ตรวจ Primary key, UPDATE/DELETE permission และค่าต้นฉบับก่อนบันทึก
+- Save เป็น transaction เดียว ตรวจ Primary key, INSERT/UPDATE/DELETE permission และค่าต้นฉบับก่อนบันทึก
 - SQL editor ยังอ่านอย่างเดียว; Manual Save แยกจาก query/AI รองรับลบแถวที่เลือก ไม่มี Truncate endpoint
 - UI กระชับ โทนเรียบ ข้อมูลไม่มี status สี, filter ใช้ bound parameters, pagination และ virtualized grid ตามขนาดหน้าจอ
 - SQL editor พร้อม syntax highlighting, completion และ `Cmd/Ctrl + Enter`
@@ -29,9 +32,10 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - ปุ่ม Updates มุมล่างขวาเปิดหน้าดาวน์โหลด GitHub; รุ่น Preview ต้องติดตั้งทับเอง ส่วน signed release มี Update options สำหรับตรวจและติดตั้งในแอป
 - แถวใน Data และ Row details สลับสีตามธีมมืด/สว่าง โดยสีแก้ไขและลบยังเด่นกว่า; เริ่มต้น 100 แถวต่อหน้า เลือก 50/100/250/500 ได้
 - กดค้างหรือลากแท็บเพื่อจัดลำดับ มีภาพแท็บลอยและเลื่อนเมื่อชิดขอบ; Alt+←/→ ใช้แทนการลากได้ จำลำดับกับ connection ในเครื่องโดยไม่โหลดข้อมูลใหม่
+- เมื่อแท็บล้นพื้นที่ ใช้ลูกกลิ้งเมาส์เลื่อนซ้าย–ขวาได้ และยังใช้แทร็กแพดแนวนอนได้
 - วิธีสร้างตัวติดตั้งและออกรุ่นใหม่: [Distribution guide](docs/DISTRIBUTION.md)
 
-เซลล์ Primary key, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ Save จำกัด 100 แถว/500 เซลล์ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual UPDATE/DELETE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
+Primary key ของแถวเดิม, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ ส่วนแถวใหม่กรอก Primary key ที่ไม่ได้สร้างอัตโนมัติได้ Save จำกัด 100 แถว/500 เซลล์/4 MiB ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual INSERT/UPDATE/DELETE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
 
 - จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
 - สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
@@ -41,7 +45,7 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 - ช่องรอ Save มีพื้นหลังไฮไลต์; คลิกเลขแถว # แล้ว Delete/Backspace เพื่อเตรียมลบเป็นสีแดง และ Restore/Discard เพื่อคืนแถว; ต้องมี Primary key และสิทธิ์ DELETE
 - ลากหัวคอลัมน์สลับตำแหน่ง หรือ Alt+ลูกศรซ้าย/ขวา; บันทึกตำแหน่งเฉพาะเครื่องนี้ ไม่เปลี่ยน schema
 - Timestamp พิมพ์เองหรือใช้ปฏิทิน/เวลาได้ทั้งการแก้ไขและ filter โดยรักษา offset และเศษวินาที; filter ใช้สัญลักษณ์พร้อมคำอธิบายเมื่อชี้เมาส์
-- แบ่งหน้า 50 รายการเริ่มต้น เลือก 100/250/500 ได้; แสดงจำนวนประมาณก่อน และ Count exact สำหรับนับตาม filter โดยมี query timeout 5 วินาที
+- แบ่งหน้า 100 รายการเริ่มต้น เลือก 50/100/250/500 ได้; แสดงจำนวนประมาณก่อน และ Count exact สำหรับนับตาม filter โดยมี query timeout 5 วินาที
 - Full values เปิดการตัดบรรทัดเพื่อดูค่าเต็มในหน้าปัจจุบัน (ปิดเป็นค่าเริ่มต้น); คอลัมน์ # ตรึงเมื่อเลื่อนแนวนอน
 - Row details ข้าง Full values เปิด/ปิดแถบดูข้อมูลด้านขวา: เริ่มกว้าง 10% ของพื้นที่ตาราง ลากขยาย/ย่อและปิดด้วย × ได้ จดจำค่าเปิด–ปิดและความกว้างเฉพาะเครื่อง แสดงค่าเต็มเรียงแนวตั้ง เลื่อนดูได้ และจัด JSON/JSONB ให้อ่านง่ายโดยคงตัวเลข/ทศนิยมเดิม; ใช้ข้อมูลที่โหลดแล้ว ไม่ query เพิ่ม
 - สีแก้ไขและสีแดงเตรียมลบเด่นกว่าสีเลือกแถว; แถบ Row details อ่านอย่างเดียวและแสดง draft ล่าสุด โดยไม่บันทึกข้อมูลแถวลง storage
@@ -153,7 +157,7 @@ src-tauri/src/
   redis_store.rs             Redis read-command allowlist และ typed responses
   remote_profile.rs          Session settings และ TLS/input validation
   bounded_stream.rs          Redis wire-byte limit ก่อน decode
-  mutations.rs               Typed manual UPDATE/DELETE, conflict checks และ atomic save
+  mutations.rs               Typed manual INSERT/UPDATE/DELETE, conflict checks และ atomic save
   models.rs                  DTOs และ safe errors
 tests/                       Disposable database fixture และ browser UI tests
 ```

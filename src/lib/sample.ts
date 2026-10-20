@@ -13,12 +13,15 @@ const column = (name: string, dataType: string, primaryKey = false, nullable = f
   primaryKey,
   nullable,
   editable: !primaryKey,
+  insertable: !primaryKey,
+  hasDefault: primaryKey,
 });
 export const sampleTables: TableInfo[] = [
   {
     schema: 'public',
     deletable: true,
     name: 'orders',
+    insertable: true,
     estimatedRows: 450,
     columns: [
       column('id', 'int8', true),
@@ -33,6 +36,7 @@ export const sampleTables: TableInfo[] = [
     schema: 'public',
     deletable: true,
     name: 'customers',
+    insertable: true,
     estimatedRows: 3,
     columns: [
       column('id', 'int8', true),

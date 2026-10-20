@@ -1,6 +1,6 @@
 [package]
 name = "buggy-table"
-version = "0.1.9"
+version = "0.1.10"
 description = "A local database workspace with guarded queries and explicit table saves"
 edition = "2024"
 rust-version = "1.90"

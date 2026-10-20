@@ -500,7 +500,8 @@ impl Database {
             "SELECT c.oid, c.relname, c.reltuples::bigint, c.relkind::text, c.relrowsecurity,
                has_table_privilege(c.oid, 'SELECT'),
                EXISTS (SELECT 1 FROM pg_inherits WHERE inhparent = c.oid),
-               has_table_privilege(c.oid, 'DELETE')
+               has_table_privilege(c.oid, 'DELETE'),
+               has_table_privilege(c.oid, 'INSERT') OR has_any_column_privilege(c.oid, 'INSERT')
              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')
                AND ($2::text IS NULL OR c.relname = $2)
@@ -513,7 +514,9 @@ impl Database {
                a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE'),
                n.nspname, t.oid, t.typtype::text, t.typelem, COALESCE(e.typtype::text, ''),
                t.typinput = 'pg_catalog.array_in'::regproc AND t.typoutput = 'pg_catalog.array_out'::regproc,
-               a.attgenerated::text
+               a.attgenerated::text,
+               a.attgenerated = '' AND a.attidentity = '' AND has_column_privilege(a.attrelid, a.attnum, 'INSERT'),
+               a.atthasdef OR a.attidentity <> '' OR a.attgenerated <> ''
              FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
              JOIN pg_namespace n ON n.oid = t.typnamespace
              LEFT JOIN pg_type e ON e.oid = t.typelem
@@ -567,6 +570,8 @@ impl Database {
                 type_schema: column.get(6),
                 nullable: column.get(3),
                 primary_key: column.get(4),
+                insertable: self.manual_edits && column.get::<_, bool>(13),
+                has_default: column.get(14),
                 editable: self.manual_edits
                     && column.get::<_, bool>(5)
                     && !column.get::<_, bool>(4),
@@ -604,6 +609,7 @@ impl Database {
             if reason.is_some() || kind != "r" {
                 for column in &mut columns {
                     column.editable = false;
+                    column.insertable = false;
                 }
             }
             let deletable = self.manual_edits
@@ -612,6 +618,11 @@ impl Database {
                 && row.get::<_, bool>(7)
                 && columns.iter().any(|c| c.primary_key);
             tables.push(TableInfo {
+                insertable: self.manual_edits
+                    && kind == "r"
+                    && reason.is_none()
+                    && row.get::<_, bool>(8)
+                    && columns.iter().any(|c| c.primary_key),
                 deletable,
                 schema: schema.into(),
                 name: row.get(1),

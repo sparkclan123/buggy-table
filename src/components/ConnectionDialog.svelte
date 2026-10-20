@@ -200,13 +200,13 @@
     <label
       >Transport security<select bind:value={tls} disabled={busy || readingCa}
         ><option value="verifyFull">TLS · verify certificate and hostname</option>
-        {#if engine === 'postgres'}<option value="require"
+        {#if engine !== 'redis'}<option value="require"
             >TLS · encrypted, certificate not verified</option
           >{/if}
         <option value="localOnly">Local only · unencrypted loopback IP</option></select
       ></label
     >
-    {#if engine === 'postgres' && tls === 'require'}
+    {#if engine !== 'redis' && tls === 'require'}
       <p class="muted small" role="note">
         TLS is required, but the server's identity is not verified. Use only if you trust this
         endpoint. No plaintext fallback.
@@ -241,8 +241,8 @@
     {/if}
     <div class="info-note">
       <ShieldCheck size={18} /><span
-        >{#if engine === 'postgres'}Save applies your cell edits and staged row deletions, using
-          your database permissions. SQL stays read-only. Turn off manual edits to require a
+        >{#if engine === 'postgres'}Save applies your cell edits, copied rows and staged deletions,
+          using your database permissions. SQL stays read-only. Turn off manual edits to require a
           restricted reader account.{:else if engine === 'mysql'}MySQL 8.x · read-only. Use a
           dedicated account with SELECT / SHOW VIEW grants only. Roles and write privileges are
           rejected.{:else}Redis · read-only commands. Use a restricted ACL user; the app does not

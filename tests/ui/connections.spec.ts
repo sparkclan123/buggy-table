@@ -57,9 +57,24 @@ async function connections(page: Page, restoreTabs = false, manyTabs = false) {
           schema,
           name: 'items',
           estimatedRows: 1,
+          insertable: true,
           columns: [
-            { name: 'id', dataType: 'int8', nullable: false, primaryKey: true, editable: false },
-            { name: 'label', dataType: 'text', nullable: false, primaryKey: false, editable: true },
+            {
+              name: 'id',
+              dataType: 'int8',
+              nullable: false,
+              primaryKey: true,
+              editable: false,
+              insertable: true,
+            },
+            {
+              name: 'label',
+              dataType: 'text',
+              nullable: false,
+              primaryKey: false,
+              editable: true,
+              insertable: true,
+            },
           ],
         },
         {
@@ -459,4 +474,73 @@ test('tab drag autoscrolls an overflowing strip and persists only tab identities
   ]);
   expect(saved.activeTab).toBe(JSON.stringify(['public', 'items']));
   expect(JSON.stringify(saved)).not.toContain('Reordered draft');
+});
+
+test('mouse wheel scrolls overflowing tabs horizontally, retaining trackpad and zoom behavior', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 700 });
+  await connections(page, false, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Reconnect Alpha', exact: true }).click();
+  const strip = page.getByRole('tablist', { name: 'Open tables' });
+  await expect(strip.getByRole('tab')).toHaveCount(6);
+  await strip.hover();
+  await page.mouse.wheel(0, 180);
+  await expect.poll(() => strip.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
+  await page.mouse.wheel(-500, 0);
+  await expect.poll(() => strip.evaluate((e) => e.scrollLeft)).toBe(0);
+  expect(
+    await strip.evaluate((e) => {
+      const event = new WheelEvent('wheel', {
+        deltaY: 50,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      e.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  ).toBe(false);
+  expect(await page.locator('.grid-scroll').evaluate((e) => e.scrollTop)).toBe(0);
+});
+
+test('copied rows allow required primary keys and undo, and draft deletion needs no DELETE grant', async ({
+  page,
+}) => {
+  await start(page);
+  await page.evaluate(() => {
+    let saved: Record<string, string> = {};
+    document.addEventListener('copy', (e) => {
+      if (e.clipboardData && e.defaultPrevented)
+        saved = Object.fromEntries(
+          [...e.clipboardData.types].map((t) => [t, e.clipboardData!.getData(t)]),
+        );
+    });
+    (window as unknown as { pasteRows: () => void }).pasteRows = () => {
+      const data = new DataTransfer();
+      Object.entries(saved).forEach(([k, v]) => data.setData(k, v));
+      document.activeElement?.dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }),
+      );
+    };
+  });
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.getByRole('button', { name: 'Select row 1', exact: true }).click();
+  await page.keyboard.press(`${mod}+c`);
+  await page.evaluate(() => (window as unknown as { pasteRows: () => void }).pasteRows());
+  const id = page.getByRole('button', { name: 'Edit row 2 id', exact: true });
+  await expect(id).toHaveText('Required');
+  await id.click();
+  await page.getByLabel('Cell value row 2 id', { exact: true }).fill('9007199254740993');
+  await page.keyboard.press('Enter');
+  await expect(id).toHaveText('9007199254740993');
+  await page.keyboard.press(`${mod}+z`);
+  await expect(id).toHaveText('Required');
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.pending-delete')).toHaveCount(1);
+  await page.keyboard.press(`${mod}+z`);
+  await expect(page.locator('.pending-delete')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(page.getByText('1 rows shown')).toBeVisible();
 });

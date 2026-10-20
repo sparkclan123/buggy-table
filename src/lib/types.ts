@@ -20,6 +20,8 @@ export interface ColumnInfo {
   nullable: boolean;
   primaryKey: boolean;
   editable: boolean;
+  insertable?: boolean;
+  hasDefault?: boolean;
 }
 export interface TableInfo {
   schema: string;
@@ -27,6 +29,7 @@ export interface TableInfo {
   columns: ColumnInfo[];
   estimatedRows: number | null;
   deletable?: boolean;
+  insertable?: boolean;
   relationKind?: string;
   readBlockedReason?: string | null;
 }
@@ -110,6 +113,7 @@ export interface RowCount {
 }
 
 export interface RowChange {
+  insert?: boolean;
   delete?: boolean;
   original: Record<string, string | null>;
   changes: Record<string, string | null>;
@@ -122,6 +126,7 @@ export interface SaveRequest {
   rows: RowChange[];
 }
 export interface SaveResult {
+  insertedRows?: number;
   updatedRows: number;
   deletedRows?: number;
 }

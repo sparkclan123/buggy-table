@@ -41,6 +41,19 @@
   let frame = 0;
   let suppressClick = false;
   let announcement = $state('');
+  function wheelScroll(node: HTMLDivElement) {
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || node.scrollWidth <= node.clientWidth) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? node.clientWidth : 1;
+      const delta =
+        (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY) * unit;
+      const before = node.scrollLeft;
+      node.scrollLeft += delta;
+      if (node.scrollLeft !== before) event.preventDefault();
+    };
+    node.addEventListener('wheel', wheel, { passive: false });
+    return { destroy: () => node.removeEventListener('wheel', wheel) };
+  }
   const draggedTab = $derived(visible.find((tab) => tab.id === drag?.id));
 
   function position() {
@@ -193,7 +206,7 @@
   }}
 />
 
-<div class="table-tabbar" role="tablist" aria-label="Open tables" bind:this={strip}>
+<div class="table-tabbar" role="tablist" aria-label="Open tables" bind:this={strip} use:wheelScroll>
   {#each visible as item (item.id)}
     <div
       class="table-tab"

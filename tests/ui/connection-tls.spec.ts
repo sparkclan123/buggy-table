@@ -37,6 +37,11 @@ test('PostgreSQL TLS compatibility is explicit and does not leak into other engi
   await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
   await page.getByLabel('Database engine').selectOption('mysql');
   await expect(security).toHaveValue('verifyFull');
+  await expect(security.locator('option[value="require"]')).toHaveCount(1);
+  await security.selectOption('require');
+  await expect(page.getByRole('note')).toContainText("server's identity is not verified");
+  await page.getByLabel('Database engine').selectOption('redis');
+  await expect(security).toHaveValue('verifyFull');
   await expect(security.locator('option[value="require"]')).toHaveCount(0);
   await page.getByLabel('Database engine').selectOption('postgres');
   await expect(security).toHaveValue('verifyFull');

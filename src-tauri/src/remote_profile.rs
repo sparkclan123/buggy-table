@@ -18,13 +18,13 @@ pub struct RemoteProfile {
 impl RemoteProfile {
     pub fn new(r: ConnectRequest) -> AppResult<Self> {
         let password = Zeroizing::new(r.password);
-        if r.tls == TlsMode::Require
+        if (r.tls == TlsMode::Require && r.engine != Engine::Mysql)
             || (!r.root_ca_pem.is_empty()
                 && (r.engine != Engine::Mysql || r.tls != TlsMode::VerifyFull))
         {
             return Err(AppError::new(
                 "INVALID_CONNECTION",
-                "Custom CA certificates require verified TLS on PostgreSQL or MySQL. Redis requires the system trust store.",
+                "Custom CA certificates require verified TLS on PostgreSQL or MySQL. Redis supports verified TLS or loopback only.",
             ));
         }
         crate::postgres::parse_root_ca(&r.root_ca_pem)?;

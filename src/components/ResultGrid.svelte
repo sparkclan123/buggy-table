@@ -5,7 +5,8 @@
   import RowInspector from './RowInspector.svelte';
   import { temporalKind } from '../lib/temporal';
   import { readColumnOrder, saveColumnOrder } from '../lib/column-layout';
-  import type { CellEdits } from '../lib/workspace';
+  import type { CellEdits, CellValue, DraftRow } from '../lib/workspace';
+  import { copyRows, pastedRows } from '../lib/row-clipboard';
   import type { QueryResult, TableInfo } from '../lib/types';
 
   let {
@@ -14,6 +15,13 @@
     busy = false,
     editable = false,
     edits = {},
+    insertedRows = [],
+    draftRevision = 0,
+    clipboardScope = '',
+    onpaste = () => {},
+    oneditstart = () => {},
+    oneditend = () => {},
+    onundo = () => {},
     deletedRows = [],
     selectedRows = $bindable([]),
     fullValues = false,
@@ -36,6 +44,13 @@
     busy?: boolean;
     editable?: boolean;
     edits?: CellEdits;
+    insertedRows?: DraftRow[];
+    draftRevision?: number;
+    clipboardScope?: string;
+    onpaste?: (rows: DraftRow[]) => void;
+    oneditstart?: (row: number, column: string) => void;
+    oneditend?: () => void;
+    onundo?: (redo: boolean) => void;
     deletedRows?: number[];
     selectedRows?: number[];
     fullValues?: boolean;
@@ -49,16 +64,20 @@
     sortColumn?: string | null;
     descending?: boolean;
     onsort?: (column: string) => void;
-    onchange?: (row: number, column: string, value: string | null) => void;
+    onchange?: (row: number, column: string, value: CellValue) => void;
     ondelete?: (rows: number[]) => void;
     onlayoutwarning?: () => void;
   } = $props();
   type Editing = {
     row: number;
     column: string;
-    original: string | null;
+    original: CellValue;
     draft: string;
     cell: HTMLTableCellElement;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
   };
   let editing = $state<Editing | null>(null);
   let resizing: { column: string; start: number; width: number } | null = null;
@@ -73,7 +92,20 @@
   let scroller: HTMLDivElement;
   let loadedResult: QueryResult | null = null;
   let loadedLayout = '';
+  let seenRevision = -1;
+  let seenInserted = 0;
+  const rows = $derived([
+    ...(result?.rows ?? []),
+    ...insertedRows.map((row) =>
+      (result?.columns ?? []).map((c) => (Object.hasOwn(row, c) ? row[c] : undefined)),
+    ),
+  ]);
   const metadata = $derived(Object.fromEntries((table?.columns ?? []).map((c) => [c.name, c])));
+  const expanded = $derived(
+    !!editing &&
+      !temporalKind(metadata[editing.column]?.dataType) &&
+      (editing.draft.includes('\n') || editing.draft.length * 7 > width(editing.column) - 24),
+  );
   const indices = $derived(Object.fromEntries((result?.columns ?? []).map((name, i) => [name, i])));
   const columns = $derived([
     ...new Set([...order.filter((c) => c in indices), ...(result?.columns ?? [])]),
@@ -86,7 +118,7 @@
   );
   const inspectorRow = $derived(
     inspectorEnabled && !inspectorDismissed && activeRow !== undefined
-      ? result?.rows[activeRow]
+      ? rows[activeRow]
       : undefined,
   );
   const inspectorFields = $derived(
@@ -94,14 +126,16 @@
       ? columns.map((name) => ({
           name,
           column: metadata[name],
-          value: display(activeRow, name, inspectorRow[indices[name]]),
-          edited: !!edits[activeRow] && name in edits[activeRow],
+          value:
+            display(activeRow, name, inspectorRow[indices[name]]) ??
+            (inspectorRow[indices[name]] === undefined ? defaultLabel(name) : null),
+          edited: isNew(activeRow) || Object.hasOwn(edits[activeRow] ?? {}, name),
         }))
       : [],
   );
   const offsets = $derived.by(() => {
     const values = [0];
-    for (let i = 0; i < (result?.rows.length ?? 0); i++)
+    for (let i = 0; i < rows.length; i++)
       values.push(values[i] + (fullValues ? (heights[i] ?? 56) : 28));
     return values;
   });
@@ -116,7 +150,37 @@
     return lo;
   }
   const start = $derived(Math.max(0, rowAt(top) - 4));
-  const end = $derived(Math.min(result?.rows.length ?? 0, rowAt(top + viewportHeight) + 5));
+  const end = $derived(Math.min(rows.length, rowAt(top + viewportHeight) + 5));
+  $effect(() => {
+    if (draftRevision !== seenRevision) {
+      const initial = seenRevision === -1;
+      seenRevision = draftRevision;
+      const cell = editing?.cell;
+      editing = null;
+      if (!initial)
+        void tick().then(() => {
+          if (cell?.isConnected)
+            cell.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+          else if (document.activeElement === document.body)
+            scroller?.focus({ preventScroll: true });
+        });
+    }
+  });
+  $effect(() => {
+    const count = insertedRows.length;
+    if (count > seenInserted)
+      void tick().then(() => {
+        if (!scroller) return;
+        top = scroller.scrollHeight;
+        scroller.scrollTop = top;
+        void tick().then(() =>
+          scroller
+            .querySelector<HTMLButtonElement>('.row-select[aria-pressed="true"]')
+            ?.focus({ preventScroll: true }),
+        );
+      });
+    seenInserted = count;
+  });
   $effect(() => {
     if (busy || result !== loadedResult) editing = null;
     if (result !== loadedResult) {
@@ -170,13 +234,14 @@
   function setWidth(column: string, value: number) {
     widths[column] = Math.max(72, Math.min(800, Math.round(value)));
   }
-  function display(row: number, column: string, original: string | null) {
-    return edits[row] && column in edits[row] ? edits[row][column] : original;
+  function display(row: number, column: string, original: CellValue) {
+    return Object.hasOwn(edits[row] ?? {}, column) ? edits[row][column] : original;
   }
   async function finish(focusCell = false, revert = false) {
     const current = editing;
     if (!current) return;
     if (revert) onchange(current.row, current.column, current.original);
+    oneditend();
     editing = null;
     if (focusCell) {
       await tick();
@@ -229,20 +294,91 @@
     inspectorDismissed = false;
   }
   function canEdit(row: number, column: string) {
-    return editable && metadata[column]?.editable && !deletedRows.includes(row);
+    return (
+      editable &&
+      (isNew(row) ? metadata[column]?.insertable : metadata[column]?.editable) &&
+      !deletedRows.includes(row)
+    );
   }
-  function activateCell(event: MouseEvent, row: number, column: string, value: string | null) {
+  function isNew(row: number) {
+    return row >= (result?.rows.length ?? 0);
+  }
+  function defaultLabel(column: string) {
+    const c = metadata[column];
+    return c?.hasDefault ? 'DEFAULT' : c?.nullable ? 'NULL (default)' : 'Required';
+  }
+  function activateCell(event: MouseEvent, row: number, column: string, value: CellValue) {
     if (busy) return;
     const wasSelected = selectedRows.includes(row);
     selectRow(event, row);
-    if (wasSelected && !event.shiftKey && !event.metaKey && !event.ctrlKey && canEdit(row, column))
+    if (
+      wasSelected &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      canEdit(row, column)
+    ) {
+      const cell = (event.currentTarget as HTMLElement).closest('td')!;
+      const rect = cell.getBoundingClientRect();
+      const editorWidth = Math.min(640, Math.max(360, rect.width), window.innerWidth - 16);
+      const editorHeight = Math.min(240, window.innerHeight - 16);
+      oneditstart(row, column);
       editing = {
         row,
         column,
         original: value,
         draft: value ?? '',
-        cell: (event.currentTarget as HTMLElement).closest('td')!,
+        cell,
+        width: editorWidth,
+        height: editorHeight,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - editorWidth - 8)),
+        top: Math.max(8, Math.min(rect.top, window.innerHeight - editorHeight - 8)),
       };
+    }
+  }
+  function gridClipboard(node: HTMLDivElement) {
+    const eligible = (event: Event) =>
+      !busy &&
+      !editing &&
+      !!clipboardScope &&
+      selectedRows.length > 0 &&
+      !(event.target as Element)?.closest('input, textarea, [contenteditable="true"]') &&
+      !window.getSelection()?.toString();
+    const copy = (event: ClipboardEvent) => {
+      if (!eligible(event)) return;
+      const values = selectedRows
+        .filter((i) => rows[i] && !deletedRows.includes(i))
+        .map((i) =>
+          Object.fromEntries(
+            columns.flatMap((c) => {
+              const value = display(i, c, rows[i][indices[c]]);
+              return value === undefined ? [] : [[c, value]];
+            }),
+          ),
+        );
+      copyRows(event, clipboardScope, values, columns);
+    };
+    const paste = (event: ClipboardEvent) => {
+      if (!eligible(event)) return;
+      const values = pastedRows(event, clipboardScope);
+      if (values) onpaste(values);
+    };
+    const beforeInput = (event: InputEvent) => {
+      if (!clipboardScope || busy || !['historyUndo', 'historyRedo'].includes(event.inputType))
+        return;
+      event.preventDefault();
+      onundo(event.inputType === 'historyRedo');
+    };
+    node.addEventListener('copy', copy);
+    node.addEventListener('paste', paste);
+    node.addEventListener('beforeinput', beforeInput);
+    return {
+      destroy() {
+        node.removeEventListener('copy', copy);
+        node.removeEventListener('paste', paste);
+        node.removeEventListener('beforeinput', beforeInput);
+      },
+    };
   }
   function deleteKey(event: KeyboardEvent, row: number) {
     if (!busy && selectedRows.includes(row) && ['Backspace', 'Delete'].includes(event.key)) {
@@ -266,20 +402,33 @@
   }
 </script>
 
+<svelte:window
+  onresize={() => {
+    if (expanded) void finish();
+  }}
+/>
+
 <div class="result-area">
   <div
     class="grid-scroll"
+    role="region"
+    aria-label="Table data"
+    tabindex="-1"
     class:full-values={fullValues}
     bind:this={scroller}
     use:observeViewport
-    onscroll={() => (top = scroller.scrollTop)}
+    use:gridClipboard
+    onscroll={() => {
+      top = scroller.scrollTop;
+      if (expanded) void finish();
+    }}
     aria-busy={busy}
   >
     {#if result && columns.length}
       <table
         class="data-table"
         aria-label="Query results"
-        aria-rowcount={result.rows.length + 1}
+        aria-rowcount={rows.length + 1}
         style:width={`${totalWidth}px`}
       >
         <colgroup
@@ -388,7 +537,7 @@
           {#if start > 0}<tr aria-hidden="true" class="spacer"
               ><td colspan={columns.length + 1} style:height={`${offsets[start]}px`}></td></tr
             >{/if}
-          {#each result.rows.slice(start, end) as row, i (start + i)}
+          {#each rows.slice(start, end) as row, i (start + i)}
             {@const index = start + i}
             <tr
               aria-rowindex={index + 2}
@@ -417,12 +566,19 @@
                 {@const original = row[indices[column]]}
                 {@const cell = display(index, column, original)}
                 <td
-                  title={cell ?? 'NULL'}
-                  class:edited={!!edits[index] && column in edits[index]}
+                  title={cell === undefined ? defaultLabel(column) : (cell ?? 'NULL')}
+                  class:edited={isNew(index) || Object.hasOwn(edits[index] ?? {}, column)}
                   class:editing={editing?.row === index && editing.column === column}
                 >
                   {#if editing?.row === index && editing.column === column}
-                    <div class="cell-input-wrap">
+                    <div
+                      class="cell-input-wrap"
+                      class:expanded-editor={expanded}
+                      style:left={expanded ? `${editing.left}px` : undefined}
+                      style:top={expanded ? `${editing.top}px` : undefined}
+                      style:width={expanded ? `${editing.width}px` : undefined}
+                      style:height={expanded ? `${editing.height}px` : undefined}
+                    >
                       {#if temporalKind(metadata[column]?.dataType)}
                         <DateTimeInput
                           value={editing.draft}
@@ -459,6 +615,15 @@
                             }
                           }}></textarea>
                       {/if}
+                      {#if isNew(index) && metadata[column]?.hasDefault}<button
+                          class="set-null"
+                          title="Use database default on Save"
+                          onpointerdown={(event) => event.preventDefault()}
+                          onclick={() => {
+                            onchange(index, column, undefined);
+                            void finish(true);
+                          }}>DEFAULT</button
+                        >{/if}
                       {#if metadata[column]?.nullable}<button
                           class="set-null"
                           aria-label={`Set row ${index + 1} ${column} to NULL`}
@@ -481,16 +646,16 @@
                       onclick={(event) => activateCell(event, index, column, cell)}
                       onkeydown={(event) => cellKey(event, index)}
                     >
-                      {#if cell === null}<span class="null-value">NULL</span>{:else}{cell === ''
-                          ? '""'
-                          : cell}{/if}
+                      {#if cell === undefined}<span class="null-value">{defaultLabel(column)}</span
+                        >{:else if cell === null}<span class="null-value">NULL</span
+                        >{:else}{cell === '' ? '""' : cell}{/if}
                     </button>
                   {/if}
                 </td>
               {/each}
             </tr>
           {/each}
-          {#if end < result.rows.length}<tr aria-hidden="true" class="spacer"
+          {#if end < rows.length}<tr aria-hidden="true" class="spacer"
               ><td
                 colspan={columns.length + 1}
                 style:height={`${offsets[offsets.length - 1] - offsets[end]}px`}
@@ -498,7 +663,7 @@
             >{/if}
         </tbody>
       </table>
-      {#if !result.rows.length}<div class="empty-result">
+      {#if !rows.length}<div class="empty-result">
           <h3>No matching rows</h3>
           <p>Adjust your filters or query.</p>
         </div>{/if}

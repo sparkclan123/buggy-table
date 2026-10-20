@@ -337,6 +337,7 @@ mod tests {
 
     fn tables() -> Vec<TableInfo> {
         vec![TableInfo {
+            insertable: false,
             deletable: false,
             relation_kind: "table".into(),
             read_blocked_reason: None,
@@ -346,6 +347,8 @@ mod tests {
             columns: ["id", "name", "total"]
                 .iter()
                 .map(|name| ColumnInfo {
+                    insertable: false,
+                    has_default: false,
                     type_schema: "pg_catalog".into(),
                     name: (*name).into(),
                     data_type: "text".into(),

@@ -262,6 +262,7 @@ async fn save_trigger_session_changes_cannot_contaminate_reused_reads() {
         schema: Some(schema.clone()),
         table: "items".into(),
         rows: vec![RowChange {
+            insert: false,
             original: [
                 ("id".into(), Some("1".into())),
                 ("label".into(), Some("before".into())),
@@ -884,6 +885,7 @@ async fn editable_rows(app: &Workbench, id: &str, table: &str) -> QueryResult {
 }
 fn edit(result: &QueryResult, index: usize, column: &str, value: Option<&str>) -> RowChange {
     RowChange {
+        insert: false,
         delete: false,
         original: result
             .columns
@@ -964,6 +966,7 @@ async fn staged_deletes_and_updates_commit_atomically_and_recheck_permissions() 
     assert!(info.tables[0].deletable);
     let original = editable_rows(&app, &info.id, "items").await;
     let deletion = |index: usize| RowChange {
+        insert: false,
         delete: true,
         original: original
             .columns
@@ -1488,6 +1491,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
         schema: Some("audit".into()),
         table: "edit_items".into(),
         rows: vec![RowChange {
+            insert: false,
             delete: false,
             original: [
                 ("id".into(), Some("1".into())),
@@ -1530,6 +1534,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
         schema: Some("audit".into()),
         table: "edit_items".into(),
         rows: vec![RowChange {
+            insert: false,
             delete: false,
             original: [
                 ("id".into(), Some("1".into())),
@@ -1544,4 +1549,274 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
     assert!(app.query(query(&first.id, "SELECT 1")).await.is_err());
     assert!(app.query(query(&second.id, "SELECT 1")).await.is_ok());
     app.disconnect(&second.id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn typed_inserts_use_defaults_preserve_values_and_commit_atomically() {
+    let (admin, task) = admin().await;
+    admin.batch_execute("DROP TABLE IF EXISTS public.insert_fixture; CREATE TABLE public.insert_fixture (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text NOT NULL UNIQUE, payload json, amount numeric(30,10), note text DEFAULT 'default note', copied text GENERATED ALWAYS AS (label) STORED); GRANT SELECT ON public.insert_fixture TO tablepor_editor, tablepor_reader; GRANT INSERT(label,payload,amount,note), UPDATE(label), DELETE ON public.insert_fixture TO tablepor_editor;").await.unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.username = "tablepor_editor".into();
+    settings.password = "local-editor-only".into();
+    settings.manual_edits = true;
+    let info = app.connect(settings).await.unwrap();
+    let table = info
+        .tables
+        .iter()
+        .find(|t| t.name == "insert_fixture")
+        .unwrap();
+    assert!(table.insertable);
+    assert!(!table.columns[0].insertable && table.columns[0].has_default);
+    assert!(!table.columns.last().unwrap().insertable);
+    let insert = |label: &str| RowChange {
+        insert: true,
+        delete: false,
+        original: Default::default(),
+        changes: [
+            ("label".into(), Some(label.into())),
+            (
+                "payload".into(),
+                Some("{\"n\":9007199254740993,\"n\":2}".into()),
+            ),
+            (
+                "amount".into(),
+                Some("12345678901234567890.1234567890".into()),
+            ),
+        ]
+        .into(),
+    };
+    let mut null_note = insert("null note");
+    null_note.changes.insert("note".into(), None);
+    let saved = app
+        .save(save(
+            &info.id,
+            "insert_fixture",
+            vec![insert("default note"), null_note],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (saved.inserted_rows, saved.updated_rows, saved.deleted_rows),
+        (2, 0, 0)
+    );
+    let mut b = browse(&info.id);
+    b.table = "insert_fixture".into();
+    let data = app.browse(b).await.unwrap();
+    assert_eq!(
+        data.rows[0][2].as_deref(),
+        Some("{\"n\":9007199254740993,\"n\":2}")
+    );
+    assert_eq!(
+        data.rows[0][3].as_deref(),
+        Some("12345678901234567890.1234567890")
+    );
+    assert_eq!(data.rows[0][4].as_deref(), Some("default note"));
+    assert_eq!(data.rows[1][4], None);
+    assert_eq!(data.rows[0][5].as_deref(), Some("default note"));
+    // A constraint failure after a successful update and insert rolls back all three.
+    assert!(
+        app.save(save(
+            &info.id,
+            "insert_fixture",
+            vec![
+                edit(&data, 0, "label", Some("changed")),
+                insert("rolled back"),
+                insert("null note")
+            ]
+        ))
+        .await
+        .is_err()
+    );
+    let rows = admin
+        .query("SELECT label FROM public.insert_fixture ORDER BY id", &[])
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<_, String>(0), "default note");
+    let deletion = RowChange {
+        insert: false,
+        delete: true,
+        original: data
+            .columns
+            .iter()
+            .cloned()
+            .zip(data.rows[1].clone())
+            .collect(),
+        changes: Default::default(),
+    };
+    let saved = app
+        .save(save(
+            &info.id,
+            "insert_fixture",
+            vec![
+                edit(&data, 0, "label", Some("changed")),
+                deletion,
+                insert("new row"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (saved.inserted_rows, saved.updated_rows, saved.deleted_rows),
+        (1, 1, 1)
+    );
+    for name in ["id", "copied", "not_a_column"] {
+        let mut row = insert("forbidden");
+        row.changes.insert(name.into(), Some("1".into()));
+        assert_eq!(
+            app.save(save(&info.id, "insert_fixture", vec![row]))
+                .await
+                .unwrap_err()
+                .code,
+            "POLICY_DENIED"
+        );
+    }
+    let mut invalid = insert("bad");
+    invalid.delete = true;
+    assert_eq!(
+        app.save(save(&info.id, "insert_fixture", vec![invalid]))
+            .await
+            .unwrap_err()
+            .code,
+        "EDIT_LIMIT"
+    );
+    let mut invalid = insert("bad original");
+    invalid.original.insert("id".into(), Some("1".into()));
+    assert_eq!(
+        app.save(save(&info.id, "insert_fixture", vec![invalid]))
+            .await
+            .unwrap_err()
+            .code,
+        "EDIT_LIMIT"
+    );
+    admin.batch_execute("REVOKE INSERT(label,payload,amount,note) ON public.insert_fixture FROM tablepor_editor").await.unwrap();
+    assert_eq!(
+        app.save(save(&info.id, "insert_fixture", vec![insert("revoked")]))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    assert_eq!(
+        admin
+            .query_one("SELECT count(*) FROM public.insert_fixture", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        2
+    );
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute("DROP TABLE public.insert_fixture")
+        .await
+        .unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn inserts_distinguish_default_null_and_required_keys_and_enforce_limits() {
+    let (admin, task) = admin().await;
+    admin.batch_execute("DROP TABLE IF EXISTS public.insert_defaults; CREATE TABLE public.insert_defaults (id bigint PRIMARY KEY DEFAULT 100, label text NOT NULL DEFAULT 'default', note text); GRANT SELECT, INSERT ON public.insert_defaults TO tablepor_editor, tablepor_reader;").await.unwrap();
+    let app = Workbench::default();
+    let mut settings = request();
+    settings.username = "tablepor_editor".into();
+    settings.password = "local-editor-only".into();
+    settings.manual_edits = true;
+    let info = app.connect(settings).await.unwrap();
+    let insert = || RowChange {
+        insert: true,
+        delete: false,
+        original: Default::default(),
+        changes: Default::default(),
+    };
+    assert_eq!(
+        app.save(save(&info.id, "insert_defaults", vec![insert()]))
+            .await
+            .unwrap()
+            .inserted_rows,
+        1
+    );
+    let row = admin
+        .query_one("SELECT id,label,note FROM public.insert_defaults", &[])
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 100);
+    assert_eq!(row.get::<_, String>(1), "default");
+    assert_eq!(row.get::<_, Option<String>>(2), None);
+    admin
+        .batch_execute("ALTER TABLE public.insert_defaults ALTER COLUMN id DROP DEFAULT")
+        .await
+        .unwrap();
+    assert!(
+        app.save(save(&info.id, "insert_defaults", vec![insert()]))
+            .await
+            .is_err()
+    );
+    let mut row = insert();
+    row.changes
+        .insert("id".into(), Some("9007199254740993".into()));
+    app.save(save(&info.id, "insert_defaults", vec![row]))
+        .await
+        .unwrap();
+    let mut row = insert();
+    row.changes.insert("id".into(), None);
+    assert_eq!(
+        app.save(save(&info.id, "insert_defaults", vec![row]))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    assert_eq!(
+        app.save(save(
+            &info.id,
+            "insert_defaults",
+            (0..101).map(|_| insert()).collect()
+        ))
+        .await
+        .unwrap_err()
+        .code,
+        "EDIT_LIMIT"
+    );
+    let mut row = insert();
+    row.changes
+        .insert("label".into(), Some("x".repeat(4 * 1024 * 1024)));
+    assert_eq!(
+        app.save(save(&info.id, "insert_defaults", vec![row]))
+            .await
+            .unwrap_err()
+            .code,
+        "EDIT_LIMIT"
+    );
+    let mut row = insert();
+    row.changes = (0..501).map(|i| (format!("c{i}"), None)).collect();
+    assert_eq!(
+        app.save(save(&info.id, "insert_defaults", vec![row]))
+            .await
+            .unwrap_err()
+            .code,
+        "EDIT_LIMIT"
+    );
+    admin
+        .batch_execute("REVOKE INSERT ON public.insert_defaults FROM tablepor_reader")
+        .await
+        .unwrap();
+    let reader = app.connect(request()).await.unwrap();
+    assert_eq!(
+        app.save(save(&reader.id, "insert_defaults", vec![insert()]))
+            .await
+            .unwrap_err()
+            .code,
+        "POLICY_DENIED"
+    );
+    app.disconnect(&reader.id).await.unwrap();
+    app.disconnect(&info.id).await.unwrap();
+    admin
+        .batch_execute("DROP TABLE public.insert_defaults")
+        .await
+        .unwrap();
+    task.abort();
 }

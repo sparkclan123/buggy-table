@@ -171,6 +171,13 @@ async fn mysql_connection_failures_identify_the_failing_check_without_secrets() 
 #[tokio::test]
 #[ignore = "requires local Compose fixtures"]
 async fn mysql_private_ca_authenticates_and_reads_catalog_over_verified_tls() {
+    mysql_tls_fixture(TlsMode::VerifyFull, "localhost", true, true).await;
+    mysql_tls_fixture(TlsMode::VerifyFull, "localhost", false, false).await;
+    mysql_tls_fixture(TlsMode::VerifyFull, "127.0.0.1", true, false).await;
+    mysql_tls_fixture(TlsMode::Require, "127.0.0.1", false, true).await;
+}
+
+async fn mysql_tls_fixture(mode: TlsMode, host: &str, trust: bool, succeeds: bool) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     // A loopback TLS front end exercises the actual MySQL SSL request, certificate
@@ -209,7 +216,10 @@ async fn mysql_private_ca_authenticates_and_reads_catalog_over_verified_tls() {
         let ssl = packet(&mut socket).await;
         assert_eq!(ssl.len(), 36);
         assert_ne!(ssl[5] & 0x08, 0);
-        let mut tls = acceptor.accept(socket).await.unwrap();
+        let Ok(mut tls) = acceptor.accept(socket).await else {
+            assert!(!succeeds);
+            return;
+        };
         let mut login = packet(&mut tls).await;
         login[5] &= !0x08; // Backing socket is loopback plaintext; front end is TLS.
         login[3] -= 1;
@@ -228,13 +238,18 @@ async fn mysql_private_ca_authenticates_and_reads_catalog_over_verified_tls() {
     });
     let app = Workbench::default();
     let mut settings = request(Engine::Mysql);
-    settings.host = "localhost".into();
+    settings.host = host.into();
     settings.port = port;
-    settings.tls = TlsMode::VerifyFull;
-    settings.root_ca_pem = cert;
-    let info = app.connect(settings).await.unwrap();
-    assert_eq!(info.tables[0].name, "items");
-    app.disconnect(&info.id).await.unwrap();
+    settings.tls = mode;
+    settings.root_ca_pem = if trust { cert } else { String::new() };
+    let result = app.connect(settings).await;
+    if succeeds {
+        let info = result.unwrap();
+        assert_eq!(info.tables[0].name, "items");
+        app.disconnect(&info.id).await.unwrap();
+    } else {
+        assert_eq!(result.unwrap_err().code, "MYSQL_TLS");
+    }
     tokio::time::timeout(std::time::Duration::from_secs(5), server)
         .await
         .unwrap()
@@ -444,6 +459,9 @@ async fn adapters_reject_unsafe_transport_and_manual_write_flags_before_connecti
     for engine in [Engine::Mysql, Engine::Redis] {
         let mut r = request(engine);
         r.tls = TlsMode::Require;
+        if engine == Engine::Mysql {
+            r.root_ca_pem = "CA requires verification".into();
+        }
         assert_eq!(app.connect(r).await.unwrap_err().code, "INVALID_CONNECTION");
         let mut r = request(engine);
         r.tls = TlsMode::VerifyFull;
@@ -550,4 +568,47 @@ async fn mysql_server_denies_writes_and_app_detects_privilege_drift() {
         app.browse(browse(&info.id)).await.unwrap().rows[1][1].as_deref(),
         Some("First")
     );
+}
+
+#[tokio::test]
+#[ignore = "requires local Compose fixtures"]
+async fn mysql_require_tls_never_sends_login_to_plaintext_server() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut front, _) = listener.accept().await.unwrap();
+        let mut backing = tokio::net::TcpStream::connect("127.0.0.1:13306")
+            .await
+            .unwrap();
+        let mut head = [0_u8; 4];
+        backing.read_exact(&mut head).await.unwrap();
+        let size = usize::from(head[0]) | usize::from(head[1]) << 8 | usize::from(head[2]) << 16;
+        let mut greeting = vec![0_u8; size];
+        backing.read_exact(&mut greeting).await.unwrap();
+        let version_end = greeting.iter().position(|v| *v == 0).unwrap();
+        // Protocol, nul-terminated version, connection id, auth seed, filler,
+        // then low capability flags: clear CLIENT_SSL in the second flag byte.
+        greeting[version_end + 15] &= !0x08;
+        front.write_all(&head).await.unwrap();
+        front.write_all(&greeting).await.unwrap();
+        let mut received = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            front.read_to_end(&mut received),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            received.is_empty(),
+            "TLS required must fail before transmitting login credentials"
+        );
+    });
+    let app = Workbench::default();
+    let mut r = request(Engine::Mysql);
+    r.port = port;
+    r.tls = TlsMode::Require;
+    assert_eq!(app.connect(r).await.unwrap_err().code, "MYSQL_TLS");
+    server.await.unwrap();
 }

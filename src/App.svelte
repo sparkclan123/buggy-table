@@ -44,6 +44,13 @@
     changeCell,
     changedRows,
     pendingRows,
+    beginCellEdit,
+    endCellEdit,
+    clearHistory,
+    setDeletedRows,
+    appendRows,
+    undoDraft,
+    type DraftRow,
     type TableView as Tab,
   } from './lib/workspace';
   import RedisWorkspace from './components/RedisWorkspace.svelte';
@@ -153,6 +160,7 @@
       return;
     }
     workspace.scrollTop = 0;
+    clearHistory(workspace);
     error = '';
     workspace.plan = null;
     const countKey = JSON.stringify([
@@ -260,7 +268,13 @@
 
   async function saveChanges() {
     if (busy || !session.online || !selected || !dirtyCount || workspace.uncertain) return false;
-    const rows = changedRows(workspace.result, workspace.edits, workspace.deletedRows);
+    endCellEdit(workspace);
+    const rows = changedRows(
+      workspace.result,
+      workspace.edits,
+      workspace.deletedRows,
+      workspace.insertedRows,
+    );
     saving = true;
     busy = true;
     error = '';
@@ -269,6 +283,15 @@
       if (isSample) {
         const keys = selected.columns.filter((c) => c.primaryKey).map((c) => c.name);
         for (const edit of rows) {
+          if (edit.insert) {
+            const nextId = String(
+              Math.max(0, ...sampleRows[selected.name].map((r) => Number(r[0]))) + 1,
+            );
+            sampleRows[selected.name].push(
+              selected.columns.map((c) => (c.primaryKey ? nextId : (edit.changes[c.name] ?? null))),
+            );
+            continue;
+          }
           const original = sampleRows[selected.name].find((row) =>
             keys.every(
               (key) =>
@@ -281,7 +304,7 @@
             for (const [column, value] of Object.entries(edit.changes))
               original[selected.columns.findIndex((c) => c.name === column)] = value;
         }
-      } else {
+      } else if (rows.length) {
         await api.save({
           connectionId: connection.id,
           schema: selected.schema,
@@ -291,6 +314,8 @@
         });
       }
       workspace.edits = {};
+      workspace.insertedRows = [];
+      clearHistory(workspace);
       workspace.deletedRows = [];
       workspace.selectedRows = [];
       workspace.exactCount = null;
@@ -312,6 +337,8 @@
     if (busy) return;
     const reconcile = workspace.uncertain;
     workspace.edits = {};
+    workspace.insertedRows = [];
+    clearHistory(workspace);
     workspace.deletedRows = [];
     workspace.selectedRows = [];
     workspace.uncertain = false;
@@ -402,6 +429,7 @@
       )
       .sort((a, b) => b.lastAccess - a.lastAccess);
     for (const tab of cached.slice(5)) {
+      clearHistory(tab);
       tab.result = null;
       tab.queryResult = null;
       tab.plan = null;
@@ -754,18 +782,59 @@
 
   function stageDelete(rows: number[]) {
     if (busy || !selected || workspace.uncertain) return;
-    if (!connection.manualEdits || !selected.deletable) {
+    if (
+      !connection.manualEdits ||
+      (!selected.deletable && rows.some((i) => i < (workspace.result?.rows.length ?? 0)))
+    ) {
       error =
         'This table needs a primary key and DELETE permission in a manual-edit session to delete rows.';
       return;
     }
     const next = [...new Set([...workspace.deletedRows, ...rows])];
-    if (new Set([...next, ...Object.keys(workspace.edits).map(Number)]).size > 100) {
+    if (
+      new Set([
+        ...next.filter((i) => i < (workspace.result?.rows.length ?? 0)),
+        ...Object.keys(workspace.edits).map(Number),
+      ]).size +
+        workspace.insertedRows.length >
+      100
+    ) {
       error = 'Save at most 100 changed or deleted rows at once.';
       return;
     }
-    workspace.deletedRows = next;
+    setDeletedRows(workspace, next);
     workspace.notice = '';
+    error = '';
+  }
+
+  function pasteRows(rows: DraftRow[]) {
+    if (busy || !session.online || !selected || !workspace.result || workspace.uncertain) return;
+    if (!connection.manualEdits || !selected.insertable) {
+      error =
+        'Copying into a new row requires INSERT permission in a manual-edit PostgreSQL session.';
+      return;
+    }
+    const drafts = rows.map((row) =>
+      Object.fromEntries(
+        selected.columns
+          .filter((c) => c.insertable && !c.primaryKey && Object.hasOwn(row, c.name))
+          .map((c) => [c.name, row[c.name]]),
+      ),
+    );
+    const pending = changedRows(workspace.result, workspace.edits, workspace.deletedRows, [
+      ...workspace.insertedRows,
+      ...drafts,
+    ]);
+    if (
+      pendingRows(workspace) + drafts.length > 100 ||
+      pending.reduce((n, r) => n + Object.keys(r.changes).length, 0) > 500 ||
+      new TextEncoder().encode(JSON.stringify(pending)).length > 4 * 1024 * 1024
+    ) {
+      error = 'Save at most 100 changed rows, 500 changed cells and 4 MiB at once.';
+      return;
+    }
+    appendRows(workspace, drafts);
+    workspace.notice = `${drafts.length} new row(s) appended below this page. Primary keys use database defaults; fill any Required cells before Save.`;
     error = '';
   }
 
@@ -847,6 +916,17 @@
       return;
     }
     if (!session.online) return;
+    if (
+      modifier &&
+      event.key.toLowerCase() === 'z' &&
+      page === 'explorer' &&
+      workspace.tab === 'data' &&
+      (event.target as Element)?.closest('.result-area')
+    ) {
+      event.preventDefault();
+      if (!busy) undoDraft(workspace, event.shiftKey);
+      return;
+    }
     if (modifier && event.key.toLowerCase() === 's') {
       event.preventDefault();
       void saveChanges();
@@ -1195,7 +1275,7 @@
                   {#if workspace.deletedRows.length}<button
                       class="secondary-button small-button"
                       disabled={busy}
-                      onclick={() => (workspace.deletedRows = [])}>Restore deleted rows</button
+                      onclick={() => setDeletedRows(workspace, [])}>Restore deleted rows</button
                     >{/if}
                   <button
                     class="secondary-button small-button"
@@ -1253,7 +1333,12 @@
                 </label>
                 {#if workspace.selectedRows.length}<button
                     class="secondary-button"
-                    disabled={busy || !selected?.deletable || !connection.manualEdits}
+                    disabled={busy ||
+                      !connection.manualEdits ||
+                      (!selected?.deletable &&
+                        workspace.selectedRows.some(
+                          (i) => i < (workspace.result?.rows.length ?? 0),
+                        ))}
                     onclick={() => stageDelete(workspace.selectedRows)}
                     ><Trash2 size={13} />Delete {workspace.selectedRows.length} selected</button
                   >{/if}
@@ -1285,6 +1370,15 @@
                   !workspace.uncertain &&
                   !!selected?.columns.some((c) => c.primaryKey)}
                 edits={workspace.edits}
+                insertedRows={workspace.insertedRows}
+                draftRevision={workspace.draftRevision}
+                clipboardScope={`${connection.id}:${workspace.id}`}
+                onpaste={pasteRows}
+                oneditstart={(row, column) => beginCellEdit(workspace, row, column)}
+                oneditend={() => endCellEdit(workspace)}
+                onundo={(redo) => {
+                  if (!busy) undoDraft(workspace, redo);
+                }}
                 deletedRows={workspace.deletedRows}
                 bind:selectedRows={workspace.selectedRows}
                 fullValues={workspace.fullValues}
@@ -1318,7 +1412,7 @@
                   ? counting
                     ? 'Counting…'
                     : 'Reading…'
-                  : `${workspace.result?.rows.length ?? 0} rows shown`}{#if !isSample && workspace.result}<span
+                  : `${workspace.result?.rows.length ?? 0} rows shown${workspace.insertedRows.length ? ` + ${workspace.insertedRows.length} new` : ''}`}{#if !isSample && workspace.result}<span
                     class="footer-separator">·</span
                   ><ResultTiming
                     result={workspace.result}

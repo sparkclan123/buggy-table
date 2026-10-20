@@ -820,6 +820,38 @@ pre,
 .cell-input:focus {
   outline: none;
 }
+.cell-input {
+  scrollbar-width: auto;
+  scrollbar-color: var(--border) transparent;
+}
+.cell-input::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+.cell-input::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.cell-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cell-input-wrap.expanded-editor {
+  position: fixed;
+  z-index: 40;
+  border: 1px solid var(--focus);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: 0 8px 28px #0004;
+}
+.expanded-editor .cell-input {
+  height: 100%;
+  min-width: 0;
+  padding: 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .set-null {
   font-size: 9px;
   border: 0;
