@@ -1,4 +1,8 @@
 fn main() {
+    println!(
+        "cargo:rustc-env=VPN_TARGET={}",
+        std::env::var("TARGET").unwrap()
+    );
     #[cfg(feature = "desktop")]
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[

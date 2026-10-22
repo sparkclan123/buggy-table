@@ -1,28 +1,22 @@
-//! Docker is only used when a VPN is enabled. No host networking or host mounts.
+//! Bundled OpenVPN + private TCP/IP stack. No Docker or host network changes.
+use super::engine;
 use super::*;
-use sha2::{Digest, Sha256};
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     process::Stdio,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    process::Command,
     sync::watch,
     task::JoinHandle,
 };
 use zeroize::Zeroizing;
-
-const DOCKERFILE: &str = include_str!("../../vpn/Dockerfile");
-const HELPER: &str = include_str!("../../vpn/helper.py");
-const UP: &str = include_str!("../../vpn/up.py");
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,116 +50,10 @@ pub struct RuntimeInfo {
     pub message: String,
 }
 
-#[derive(Clone)]
-struct DockerCli {
-    binary: PathBuf,
-    endpoint: String,
-}
-impl DockerCli {
-    async fn discover() -> AppResult<Self> {
-        let mut paths = Vec::new();
-        #[cfg(target_os = "macos")]
-        paths.extend([
-            PathBuf::from("/usr/local/bin/docker"),
-            PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"),
-        ]);
-        #[cfg(target_os = "windows")]
-        if let Some(programs) = std::env::var_os("ProgramFiles") {
-            paths.push(PathBuf::from(programs).join("Docker/Docker/resources/bin/docker.exe"));
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&path).map(|p| {
-                p.join(if cfg!(windows) {
-                    "docker.exe"
-                } else {
-                    "docker"
-                })
-            }));
-        }
-        let binary = paths
-            .into_iter()
-            .find(|p| p.is_file())
-            .ok_or_else(docker_error)?;
-        let mut cmd = super::docker::command(&binary);
-        cmd.args([
-            "context",
-            "inspect",
-            "--format",
-            "{{.Endpoints.docker.Host}}",
-        ]);
-        let endpoint = run_output(cmd, 8).await?;
-        let endpoint = endpoint.trim().to_string();
-        if !(endpoint.starts_with("unix:///") || endpoint.starts_with("npipe:////./pipe/")) {
-            return Err(failure(
-                "VPN_DOCKER_LOCAL",
-                "Choose a local Docker Desktop context. Remote Docker engines are not supported for private VPN profiles.",
-            ));
-        }
-        let cli = Self { binary, endpoint };
-        let mut cmd = cli.command();
-        cmd.args(["info", "--format", "{{.OSType}}"]);
-        if run_output(cmd, 10).await?.trim() != "linux" {
-            return Err(docker_error());
-        }
-        Ok(cli)
-    }
-    fn command(&self) -> Command {
-        let mut cmd = super::docker::command(&self.binary);
-        cmd.arg("--host").arg(&self.endpoint);
-        for name in [
-            "DOCKER_HOST",
-            "DOCKER_CONTEXT",
-            "DOCKER_TLS_VERIFY",
-            "DOCKER_CERT_PATH",
-            "DOCKER_API_VERSION",
-        ] {
-            cmd.env_remove(name);
-        }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        cmd
-    }
-    async fn image(&self) -> AppResult<String> {
-        let mut cmd = self.command();
-        cmd.args(["image", "inspect", "--format", "{{.Id}}", &image_tag()]);
-        run_output(cmd, 8).await
-    }
-    async fn remove(&self, name: &str) {
-        let mut cmd = self.command();
-        cmd.args(["rm", "--force", name]);
-        let _ = run_output(cmd, 10).await;
-    }
-}
-
-fn image_tag() -> String {
-    let mut hash = Sha256::new();
-    for source in [DOCKERFILE, HELPER, UP] {
-        hash.update(source.as_bytes());
-    }
-    format!("buggy-table-openvpn:{:x}", hash.finalize())
-}
-async fn run_output(mut cmd: Command, seconds: u64) -> AppResult<String> {
-    cmd.kill_on_drop(true)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let result = tokio::time::timeout(Duration::from_secs(seconds), cmd.output())
-        .await
-        .map_err(|_| docker_error())?
-        .map_err(|_| docker_error())?;
-    if !result.status.success() || result.stdout.len() > 64 * 1024 {
-        return Err(docker_error());
-    }
-    String::from_utf8(result.stdout).map_err(|_| docker_error())
-}
-fn docker_error() -> AppError {
+fn runtime_error() -> AppError {
     failure(
-        "VPN_DOCKER",
-        "Open Docker Desktop with Linux containers, then retry. VPN uses only a local Docker engine; direct connections do not require Docker.",
+        "VPN_RUNTIME",
+        "The bundled VPN engine could not start. Reinstall the latest app for this computer; Docker is not required.",
     )
 }
 fn now() -> u64 {
@@ -176,61 +64,25 @@ fn now() -> u64 {
 }
 
 #[derive(Default)]
-pub struct VpnRuntime {
-    build: tokio::sync::Mutex<()>,
-}
+pub struct VpnRuntime {}
 impl VpnRuntime {
-    async fn cli(&self) -> AppResult<DockerCli> {
-        // Rechecking setup must observe a changed/restarted Docker context.
-        DockerCli::discover().await
-    }
     pub async fn info(&self) -> RuntimeInfo {
-        match self.cli().await {
-            Ok(cli) => {
-                let prepared = cli.image().await.is_ok();
-                RuntimeInfo {
-                    available: true,
-                    prepared,
-                    message: if prepared {
-                        "OpenVPN runtime ready."
-                    } else {
-                        "Prepare the OpenVPN runtime once. Docker Desktop must be running."
-                    }
+        match self.prepare().await {
+            Ok(()) => RuntimeInfo {
+                available: true,
+                prepared: true,
+                message: "Built-in OpenVPN ready. No Docker or additional installation needed."
                     .into(),
-                }
-            }
-            Err(e) => RuntimeInfo {
+            },
+            Err(error) => RuntimeInfo {
                 available: false,
                 prepared: false,
-                message: e.message,
+                message: error.message,
             },
         }
     }
     pub async fn prepare(&self) -> AppResult<()> {
-        self.ensure_image().await.map(|_| ())
-    }
-    async fn ensure_image(&self) -> AppResult<(DockerCli, String)> {
-        let _lock = self.build.lock().await;
-        let cli = self.cli().await?;
-        if let Ok(id) = cli.image().await {
-            return Ok((cli, id.trim().into()));
-        }
-        let context = tempfile::tempdir().map_err(|_| docker_error())?;
-        for (name, text) in [
-            ("Dockerfile", DOCKERFILE),
-            ("helper.py", HELPER),
-            ("up.py", UP),
-        ] {
-            std::fs::write(context.path().join(name), text).map_err(|_| docker_error())?;
-        }
-        super::docker::build_image(cli.command(), context.path(), &image_tag()).await?;
-        let id = cli.image().await.map_err(|_| {
-            failure(
-                "VPN_PREPARE_IMAGE",
-                "Docker finished setup but the runtime is unavailable in the local image store. Check the selected Docker context, then retry Prepare VPN.",
-            )
-        })?;
-        Ok((cli, id.trim().into()))
+        engine::verify().await
     }
     pub async fn start(
         &self,
@@ -260,58 +112,27 @@ impl VpnRuntime {
                 "For VPN connections, use the database's private hostname or IP, not localhost.",
             ));
         }
-        let (cli, image) = self.ensure_image().await?;
+        let mut cmd = engine::command()?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|_| docker_error())?;
-        let endpoint = listener.local_addr().map_err(|_| docker_error())?;
-        let name = format!("buggy-table-vpn-{}", uuid::Uuid::new_v4().simple());
+            .map_err(|_| runtime_error())?;
+        let endpoint = listener.local_addr().map_err(|_| runtime_error())?;
         let token = Zeroizing::new(format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         ));
-        let mut cmd = cli.command();
-        cmd.args([
-            "run",
-            "--rm",
-            "--interactive",
-            "--init",
-            "--pull",
-            "never",
-            "--name",
-            &name,
-            "--label",
-            "dev.tablepor.vpn=1",
-            "--cap-drop",
-            "ALL",
-            "--cap-add",
-            "NET_ADMIN",
-            "--cap-add",
-            "NET_RAW",
-            "--device",
-            "/dev/net/tun",
-            "--security-opt",
-            "no-new-privileges",
-            "--read-only",
-            "--tmpfs",
-            "/run/vpn:rw,noexec,nosuid,nodev,size=8m",
-            "--pids-limit",
-            "48",
-            "--memory",
-            "128m",
-            "--cpus",
-            "1",
-            "--log-driver",
-            "none",
-            "--publish",
-            "127.0.0.1::17353",
-            &image,
-        ]);
-        cmd.stdin(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|_| docker_error())?;
-        let mut input = child.stdin.take().ok_or_else(docker_error)?;
-        let output = child.stdout.take().ok_or_else(docker_error)?;
+        cmd.kill_on_drop(true)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(feature = "vpn-integration")]
+        if std::env::var_os("BUGGY_VPN_DIAGNOSTICS").is_some() {
+            cmd.stderr(Stdio::inherit());
+        }
+        let mut child = cmd.spawn().map_err(|_| runtime_error())?;
+        let mut input = child.stdin.take().ok_or_else(runtime_error)?;
+        let output = child.stdout.take().ok_or_else(runtime_error)?;
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Start<'a> {
@@ -335,7 +156,7 @@ impl VpnRuntime {
                 dns: &profile.dns,
                 token: &token,
             })
-            .map_err(|_| docker_error())?,
+            .map_err(|_| runtime_error())?,
         );
         bytes.push(b'\n');
         if !matches!(
@@ -344,8 +165,7 @@ impl VpnRuntime {
         ) {
             drop(input);
             drop(child);
-            cli.remove(&name).await;
-            return Err(docker_error());
+            return Err(runtime_error());
         }
         drop(bytes);
         drop(secrets);
@@ -360,6 +180,8 @@ impl VpnRuntime {
             message: "Connecting OpenVPN…".into(),
         }));
         let (updates, mut receiver) = watch::channel(false);
+        let native_port = Arc::new(AtomicU16::new(0));
+        let watch_port = native_port.clone();
         let watch_alive = alive.clone();
         let watch_status = status.clone();
         let process = tokio::spawn(async move {
@@ -372,6 +194,8 @@ impl VpnRuntime {
                         if line.len() > 1024 { break; }
                         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
                         if event["state"] == "ready" {
+                            let Some(port) = event["port"].as_u64().and_then(|value| u16::try_from(value).ok()).filter(|port| *port > 0) else { break };
+                            watch_port.store(port, Ordering::SeqCst);
                             watch_alive.store(true, Ordering::SeqCst);
                             if let Ok(mut status) = watch_status.lock() { status.state = "ready".into(); status.connected_at = Some(now()); status.message = "VPN tunnel ready.".into(); }
                             let _ = updates.send(true);
@@ -382,7 +206,12 @@ impl VpnRuntime {
                         }
                     }
                     _ = heartbeat.tick() => if input.write_all(b"keepalive\n").await.is_err() { break },
-                    _ = child.wait() => break,
+                    exit = child.wait() => {
+                        #[cfg(feature = "vpn-integration")]
+                        if std::env::var_os("BUGGY_VPN_DIAGNOSTICS").is_some() { eprintln!("Native VPN exit: {exit:?}"); }
+                        let _ = exit;
+                        break
+                    },
                 }
             }
             watch_alive.store(false, Ordering::SeqCst);
@@ -403,8 +232,6 @@ impl VpnRuntime {
             token,
             alive,
             status,
-            cli,
-            name,
             process,
             relay: None,
             probing: tokio::sync::Mutex::new(()),
@@ -418,12 +245,9 @@ impl VpnRuntime {
             }
         }).await.map_err(|_| failure("VPN_TIMEOUT", "OpenVPN did not connect within 55 seconds. Check the profile, credentials and VPN server."))?;
         startup?;
-        let mut cmd = tunnel.cli.command();
-        cmd.args(["port", &tunnel.name, "17353/tcp"]);
-        let address = run_output(cmd, 8).await?;
-        let peer: SocketAddr = address.trim().parse().map_err(|_| docker_error())?;
-        if !peer.ip().is_loopback() {
-            return Err(docker_error());
+        let peer = SocketAddr::from(([127, 0, 0, 1], native_port.load(Ordering::SeqCst)));
+        if peer.port() == 0 {
+            return Err(runtime_error());
         }
         tunnel.peer = peer;
         tunnel.probe().await?;
@@ -457,8 +281,6 @@ pub struct Tunnel {
     token: Zeroizing<String>,
     alive: Arc<AtomicBool>,
     status: Arc<Mutex<VpnStatus>>,
-    cli: DockerCli,
-    name: String,
     process: JoinHandle<()>,
     relay: Option<JoinHandle<()>>,
     probing: tokio::sync::Mutex<()>,
@@ -530,14 +352,7 @@ impl Drop for Tunnel {
             relay.abort();
         }
         self.process.abort();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let cli = self.cli.clone();
-            let name = self.name.clone();
-            runtime.spawn(async move {
-                cli.remove(&name).await;
-            });
-        }
-        // stdin EOF / 30-second heartbeat deadline also removes orphan containers.
+        // kill_on_drop and stdin EOF also terminate the owned native process.
     }
 }
 async fn authenticate(peer: SocketAddr, token: &str, mode: u8) -> AppResult<TcpStream> {
@@ -580,6 +395,11 @@ async fn authenticate(peer: SocketAddr, token: &str, mode: u8) -> AppResult<TcpS
 }
 fn vpn_error(code: &str) -> AppError {
     match code {
+        "VPN_TIMEOUT" => failure(
+            "VPN_TIMEOUT",
+            "OpenVPN did not connect before the timeout. Check the VPN server address, network and profile.",
+        ),
+        "VPN_RUNTIME" => runtime_error(),
         "VPN_AUTH" => failure(
             "VPN_AUTH",
             "OpenVPN rejected authentication. Check VPN credentials; browser SSO and interactive challenge prompts are not supported.",
@@ -608,39 +428,5 @@ fn vpn_error(code: &str) -> AppError {
             "VPN_DISCONNECTED",
             "OpenVPN is disconnected. Reconnect VPN to continue; this connection will not fall back to the normal network.",
         ),
-    }
-}
-
-#[cfg(all(test, feature = "vpn-integration"))]
-mod setup_tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore = "requires local Docker Desktop; builds only the disposable runtime"]
-    async fn prepare_uses_local_builder_and_loads_the_runtime() {
-        let cli = DockerCli::discover().await.unwrap();
-        let context = tempfile::tempdir().unwrap();
-        for (name, text) in [
-            ("Dockerfile", DOCKERFILE),
-            ("helper.py", HELPER),
-            ("up.py", UP),
-        ] {
-            std::fs::write(context.path().join(name), text).unwrap();
-        }
-        let tag = format!("buggy-table-vpn-prepare-test:{}", uuid::Uuid::new_v4());
-        let mut cmd = cli.command();
-        // A user's custom/cloud builder or platform must not redirect app setup.
-        cmd.env("BUILDX_BUILDER", "nonexistent-builder-for-regression")
-            .env("BUILDKIT_HOST", "tcp://127.0.0.1:1")
-            .env("DOCKER_DEFAULT_PLATFORM", "invalid-platform-for-regression");
-        let result = super::super::docker::build_image(cmd, context.path(), &tag).await;
-        let mut inspect = cli.command();
-        inspect.args(["image", "inspect", "--format", "{{.Id}}", &tag]);
-        let image = run_output(inspect, 8).await;
-        let mut cleanup = cli.command();
-        cleanup.args(["image", "rm", &tag]);
-        let _ = run_output(cleanup, 10).await;
-        result.unwrap();
-        assert!(image.unwrap().trim().starts_with("sha256:"));
     }
 }

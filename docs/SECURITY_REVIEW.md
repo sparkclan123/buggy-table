@@ -2,6 +2,16 @@
 
 Reviewed on 2026-10-14. This is a code review and targeted test record, not an independent penetration test or a production certification.
 
+## Bundled OpenVPN engine — 0.1.16
+
+The Docker client runtime is replaced by a bundled native process per VPN connection. OpenVPN 3 handles protocol/TLS; its external-TUN implementation sends packets to a private lwIP stack. Database TCP and DNS use only that stack. OS sockets are used for VPN transport and the authenticated loopback relay; there is no OS TUN, host route/DNS mutation, elevation or runtime dependency download. System DNS is used to locate the VPN server itself when its remote endpoint is a hostname.
+
+The imported-profile allowlist still rejects scripts, plugins, external files and management overrides. The relay accepts only its configured database destination and a random per-session token; DNS responses resolving to loopback/unspecified/multicast destinations are rejected. Active relays are limited to 24 per process, with bounded TCP windows/queues and startup/authentication deadlines. Buffers provide backpressure. stdin EOF, parent process drop and a 30-second heartbeat deadline terminate owned engines. Once a connected tunnel enters reconnect/disconnect, the session is closed instead of replaying database traffic onto another network.
+
+Credentials are passed on stdin, never command arguments or environment variables. OpenVPN diagnostics are not forwarded to the UI; only fixed status/error codes are emitted. Existing AES-256-GCM storage and OS-keystore keys are retained. Native libraries, OS paging and prior copies of secret values cannot be guaranteed erased. Same-user processes and the host administrator remain trusted; the native process is not an OS security sandbox.
+
+Pinned source archives are SHA-256 verified at build time. The engine links its crypto/compression/JSON/stack dependencies statically and ships notices/source URLs. Packaged binary integrity and functional tests are part of the installer workflow. Tests exercise private DNS/IPv6, invalid identity/authentication, fixed destinations, independent network failure, large TLS transfers, lifecycle cleanup and sanitizers. This is an engineering review, not an independent security certification.
+
 ## Isolated OpenVPN addition — 2026-10-20
 
 Each VPN-backed session owns one local Linux container and a fixed database destination. The runtime rejects remote Docker contexts. It does not mount host directories or the Docker socket, use host networking, or change host routes/DNS. Database and private-DNS sockets bind to `tun0` and a dedicated routing table with a terminal unreachable rule. OpenVPN loss closes active forwarded streams; no direct-network retry is implemented. DNS cache lifetime is bounded by the answer TTL and is cleared on tunnel loss. Database TLS continues to authenticate the original hostname.

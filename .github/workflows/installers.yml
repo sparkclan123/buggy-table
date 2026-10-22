@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/**'
       - 'src-tauri/**'
+      - 'native/**'
+      - 'scripts/build-vpn.py'
+      - '.github/actions/build-vpn/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'scripts/verify-macos-bundle.sh'
@@ -41,6 +44,7 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/build-vpn
       - run: pnpm tauri build --bundles ${{ matrix.bundles }}
       - name: Verify macOS bundle and packaged app
         if: runner.os == 'macOS'

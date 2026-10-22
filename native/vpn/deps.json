@@ -1,0 +1,26 @@
+{
+  "openvpn3": {
+    "url": "https://codeload.github.com/OpenVPN/openvpn3/tar.gz/4f3bdef73245d4ee9e8216c5d65baccc9568f6ef",
+    "sha256": "522faf3f7485117423a9c398606062105c4453c11d4d5ebab45e7c209cc3a9ef"
+  },
+  "lwip": {
+    "url": "https://codeload.github.com/lwip-tcpip/lwip/tar.gz/STABLE-2_2_1_RELEASE",
+    "sha256": "ce0b7461c0ad9602c376f0bf07c5eb7253b48c7bf66f011c6bf3e2a96731c539"
+  },
+  "asio": {
+    "url": "https://codeload.github.com/chriskohlhoff/asio/tar.gz/asio-1-36-0",
+    "sha256": "0310a76b27e1854f09f696b30de57dc490b5e1b17faed1eb8c9a2891f956e52b"
+  },
+  "lz4": {
+    "url": "https://codeload.github.com/lz4/lz4/tar.gz/v1.10.0",
+    "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"
+  },
+  "xxhash": {
+    "url": "https://codeload.github.com/Cyan4973/xxHash/tar.gz/v0.8.3",
+    "sha256": "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80"
+  },
+  "jsoncpp": {
+    "url": "https://codeload.github.com/open-source-parsers/jsoncpp/tar.gz/1.9.6",
+    "sha256": "f93b6dd7ce796b13d02c108bc9f79812245a82e577581c4c9aabe57075c90ea2"
+  }
+}

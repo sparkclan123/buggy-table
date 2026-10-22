@@ -57,38 +57,31 @@ MySQL ที่ขึ้น “TLS verification failed” ให้ตรวจ 
 
 ## OpenVPN แยกต่อฐานข้อมูล
 
-ต้องติดตั้งและเปิด **Docker Desktop ในโหมด Linux containers** ใช้ Docker context ในเครื่อง รองรับ Mac/Windows; connection ที่ปิด VPN ไม่ต้องใช้ Docker
+**ตั้งแต่ 0.1.16 ไม่ต้องติดตั้ง Docker, OpenVPN client หรือ driver เพิ่ม** ตัวติดตั้งรวม OpenVPN engine และระบบเครือข่ายเฉพาะแอปไว้แล้ว รองรับ Mac/Windows โปรไฟล์ที่บันทึกไว้ใช้ต่อได้โดยไม่ต้องนำเข้าใหม่
 
 1. กดรูปตั้งค่าข้างสวิตช์ **VPN** ใน connection หรือในฟอร์มต่อฐานข้อมูล
 2. กด **Add VPN** เลือกไฟล์ `.ovpn` แบบ inline (CA/certificate/key อยู่ในไฟล์เดียว) ตั้งชื่อ และกรอก VPN username/password หากเซิร์ฟเวอร์ต้องใช้ เพิ่มได้หลายโปรไฟล์ต่อ connection
 3. เลือก radio ของโปรไฟล์เพื่อกำหนด default เปิด **Use VPN for this database** แล้ว Apply การตั้งค่าจะจำคู่กับ bookmark บนเครื่องนี้ เปิดแอปใหม่ยังไม่เชื่อมอัตโนมัติ; เมื่อกด Reconnect จะต่อ VPN ก่อนตรวจสิทธิ์ฐานข้อมูล
 4. ใส่ Host ของฐานข้อมูลเป็น **ชื่อหรือ IP ภายใน VPN** ไม่ใช่ localhost หาก VPN ไม่ส่ง DNS มา ให้ใส่ private DNS IP ใน Advanced หรือใช้ IP ของฐานข้อมูล
 
-ครั้งแรกแอปเตรียม OpenVPN runtime โดยดาวน์โหลดและ build Docker image อาจใช้เวลาหลายนาที สามารถกด **Prepare** ล่วงหน้าใน VPN settings ได้ หลังจากนั้นใช้ image เดิมและคง tunnel ไว้ตลอด session ไม่ handshake VPN ทุก query เมื่อ Disconnect จะหยุด container ของ connection นั้น
+หน้า settings แสดง **OpenVPN ready** โดยไม่ต้อง Prepare หรือดาวน์โหลดเพิ่ม แต่ละ VPN มี process และ TCP/IP stack ของตนเอง คง tunnel ไว้ตลอด session ไม่ handshake ใหม่ทุก query เมื่อ Disconnect จะหยุด process ของ connection นั้น
 
 สวิตช์ปิดใช้เครือข่ายปกติของเครื่อง เปิดใช้ VPN ของ connection นั้น แต่ละ tunnel แยก routing/DNS จึงใช้ฐานข้อมูลคนละ VPN ที่มี private IP หรือชื่อซ้ำกันได้ การต่อ VPN ไม่เปลี่ยนโหมด TLS ของฐานข้อมูล: verified TLS ยังคงตรวจชื่อ Host เดิม ส่วน private CA ของ DB ต้องตั้งแยกจาก CA ใน `.ovpn`
 
-**สถานะและ refresh:** จุดสถานะแสดง tunnel ready / disconnected / destination unreachable ใน VPN settings มีผลตรวจและเวลาล่าสุด **Test route** ตรวจ DNS/TCP ไปยังพอร์ตฐานข้อมูลผ่าน VPN และแสดง latency ไม่รัน SQL และไม่ได้ยืนยันว่า login/query จะผ่าน การอ่านสถานะอัตโนมัติทุก 15 วินาทีไม่ส่ง query หรือ health probe เพิ่ม การตรวจสายขาดของ OpenVPN อาจใช้เวลาประมาณ 40 วินาที ก่อน UI รอบถัดไปแสดงผล กด **Reconnect** หรือไอคอน refresh ข้าง VPN เพื่อต่อทั้ง VPN และฐานข้อมูลของ connection นั้นใหม่
+**สถานะและ refresh:** จุดสถานะแสดง tunnel ready / disconnected / destination unreachable ใน VPN settings มีผลตรวจและเวลาล่าสุด **Test route** ตรวจ DNS/TCP ไปยังพอร์ตฐานข้อมูลผ่าน VPN และแสดง latency ไม่รัน SQL และไม่ได้ยืนยันว่า login/query จะผ่าน การอ่านสถานะอัตโนมัติทุก 15 วินาทีไม่ส่ง query หรือ health probe เพิ่ม การตรวจสายขาดของ OpenVPN ขึ้นกับค่า keepalive ของ VPN server และรอบตรวจสถานะ กด **Reconnect** หรือไอคอน refresh ข้าง VPN เพื่อต่อทั้ง VPN และฐานข้อมูลของ connection นั้นใหม่
 
 ต้อง Save/Discard งานแก้ค้างก่อนเปลี่ยน network หรือ Reconnect แอปตรวจ connection ใหม่ก่อนแทน session เดิม หากล้มเหลวจะไม่ล้าง workspace เดิม VPN ที่หลุด **ไม่ fallback** ไปเครือข่ายหลัก การใช้งานใบรับรอง client เดียวพร้อมกันหลาย connection รวมถึงช่วง refresh ขึ้นกับข้อจำกัดของ VPN server; บาง server ตัด session เก่าเมื่อ client เดียวกันต่อใหม่ ให้ใช้ credential ที่อนุญาต concurrent sessions หรือแยก client certificates
 
 เพิ่ม/แก้ชื่อ/ลบโปรไฟล์ได้ใน settings ต้อง Disconnect ก่อนแก้หรือลบโปรไฟล์ที่กำลังใช้งาน การลบ default จะปิด VPN preference ของ connection นั้นด้วย การลบ bookmark ลบโปรไฟล์ VPN ที่เป็นเจ้าของด้วย; การปิดฟอร์ม connection ใหม่ที่ยังไม่ได้เชื่อมจะล้าง draft profiles ที่สร้างในฟอร์มนั้น
 
-ไฟล์ `.ovpn`, private keys และ VPN passwords เก็บแบบ AES-256-GCM ใน `vpn-profiles.json` โดยกุญแจอยู่ใน macOS login Keychain / Windows Credential Manager (Local) ชื่อโปรไฟล์/username/DNS/ความสัมพันธ์กับ connection เป็น metadata ที่ไม่ได้เข้ารหัส ไม่เก็บ secrets ใน browser storage, Docker environment/arguments/image layers/logs และไม่ส่ง secret เดิมกลับมาให้ UI ช่อง password ว่างตอนแก้หมายถึงเก็บค่าเดิม; เลือก Clear เพื่อล้างรหัสผ่านที่บันทึกไว้
+ไฟล์ `.ovpn`, private keys และ VPN passwords เก็บแบบ AES-256-GCM ใน `vpn-profiles.json` โดยกุญแจอยู่ใน macOS login Keychain / Windows Credential Manager (Local) ชื่อโปรไฟล์/username/DNS/ความสัมพันธ์กับ connection เป็น metadata ที่ไม่ได้เข้ารหัส ไม่เก็บ secrets ใน browser storage, process arguments/environment หรือ logs และไม่ส่ง secret เดิมกลับมาให้ UI ช่อง password ว่างตอนแก้หมายถึงเก็บค่าเดิม; เลือก Clear เพื่อล้างรหัสผ่านที่บันทึกไว้
 
 ขอบเขตรุ่นนี้: OpenVPN TUN, inline client profile ไม่เกิน 512 KiB และ 50 โปรไฟล์รวม รองรับ username/password และ encrypted private key password ไม่รองรับ TAP, `<connection>` blocks, external certificate/key files, user scripts/plugins, browser SSO หรือ interactive MFA/challenge หากไฟล์มี option ที่ยังไม่รองรับ แอปแจ้งชื่อ option แทนการละเลยเงียบ ๆ การยืนยันกับ VPN ภายนอกแต่ละผู้ให้บริการยังต้องทดสอบกับโปรไฟล์จริงของผู้ใช้
 
 ตัวเลือก `push-peer-info` ใช้ส่งข้อมูล client เพิ่มเติมให้ VPN server ตาม [คู่มือ OpenVPN](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual.html) และไม่ใช่ script/plugin ตัวนำเข้าใน Preview 0.1.11 ปฏิเสธตัวเลือกนี้โดยผิดพลาด ตั้งแต่ 0.1.12 แก้ให้รับและคงตัวเลือกไว้แล้ว โดยไม่ต้องลบออกจากไฟล์ `.ovpn` หากพบ `Unsupported OpenVPN option` สำหรับตัวเลือกอื่น หมายถึงแอปยังไม่รองรับตัวเลือกนั้น ไม่ได้ยืนยันว่าไฟล์มีอันตราย
 
-### เมื่อ Prepare VPN ไม่สำเร็จ
+### เมื่อ VPN engine ไม่พร้อม
 
-ตั้งแต่ 0.1.13 หน้า VPN แสดงสถานะ Docker/runtime, เวลาที่ใช้เตรียม และปุ่ม **Check Docker again** เมื่อติดตั้งหรือเปิด Docker Desktop แล้วให้ตรวจซ้ำและกด **Prepare VPN** ครั้งแรกดาวน์โหลดและสร้าง runtime จึงอาจใช้เวลาหลายนาที (จำกัด 10 นาที); ครั้งถัดไปใช้ image เดิม การเตรียมใช้ไฟล์ runtime ที่มากับแอปเท่านั้น ไม่ส่งไฟล์ `.ovpn` หรือรหัส VPN ไปกับการ build
+กด **Check VPN engine again** หากแอปแจ้งว่า bundled engine หายหรือเปิดไม่ได้ ให้ติดตั้งแอปรุ่นล่าสุดให้ตรงกับเครื่อง ไฟล์ engine ต้องอยู่ใน app bundle/โฟลเดอร์ติดตั้งเดียวกับแอป ไม่ต้องติดตั้ง Docker เพื่อแก้ปัญหานี้
 
-แอปเพิ่มโฟลเดอร์เครื่องมือ Docker เฉพาะ PATH ของ process ลูก เพื่อให้หา credential helper ได้เมื่อเปิดจาก Finder โดยไม่ต้องแก้ PATH ของเครื่อง ตามข้อกำหนดของ [Docker credential helpers](https://github.com/docker/docker-credential-helpers#usage) และใช้ builder ของ local engine พร้อมโหลดผลลัพธ์เข้า image store ตาม [Docker build drivers](https://docs.docker.com/build/builders/drivers/) จึงไม่ใช้ค่า custom/cloud builder ที่ตั้งไว้สำหรับโปรเจกต์อื่น
-
-- **Docker unavailable:** เปิด Docker Desktop ให้ engine พร้อม แล้วกด Check Docker again
-- **Credential helper / Buildx:** ซ่อมหรืออัปเดต Docker Desktop แล้วเปิดแอปใหม่
-- **Saved registry credentials:** ปลดล็อก system password store หรือ sign in ใน Docker Desktop อีกครั้ง
-- **Download certificate:** ตรวจวันที่เครื่องและ CA ของ proxy/องค์กรใน Docker Desktop การตรวจนี้แยกจากใบรับรอง VPN และ database
-- **Network / registry limit / disk space:** ตรวจ network/proxy ของ Docker, การ sign in และพื้นที่ดิสก์ตามข้อความที่แสดง แล้วกด Prepare VPN ใหม่
-- หากเป็นข้อผิดพลาด build ที่ยังจำแนกไม่ได้ ให้ดูรายการที่ล้มเหลวใน **Docker Desktop → Builds** ข้อความกลางใน 0.1.11–0.1.12 เพียงอย่างเดียวระบุสาเหตุของอีกเครื่องไม่ได้
+ถ้า engine พร้อมแต่เชื่อมต่อไม่ได้ ให้ตรวจโปรไฟล์ CA/วันหมดอายุ VPN username/password และการเข้าถึง VPN server หาก tunnel พร้อมแต่ Test route ไม่ผ่าน ให้ตรวจ DNS ภายในและพอร์ตของฐานข้อมูล แอปไม่เปลี่ยนไปใช้เครือข่ายปกติโดยอัตโนมัติ

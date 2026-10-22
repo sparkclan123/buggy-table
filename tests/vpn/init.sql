@@ -5,3 +5,6 @@ INSERT INTO public.items VALUES (1, 'VPN fixture');
 GRANT CONNECT ON DATABASE fixture TO vpn_reader;
 GRANT USAGE ON SCHEMA public TO vpn_reader;
 GRANT SELECT ON public.items TO vpn_reader;
+CREATE TABLE public.large_payload (id integer PRIMARY KEY, payload text NOT NULL);
+INSERT INTO public.large_payload VALUES (1, repeat('B', 500000)), (2, repeat('C', 500000));
+GRANT SELECT ON public.large_payload TO vpn_reader;

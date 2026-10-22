@@ -19,3 +19,6 @@ playwright-report/
 artifacts/
 release-assets/
 src-tauri/tauri.signing.conf.json
+
+# Native VPN binaries and dependency notices are generated during builds
+src-tauri/binaries/

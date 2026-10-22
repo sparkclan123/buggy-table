@@ -7,7 +7,7 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 ## ใช้งานได้แล้ว
 
 - เลือก PostgreSQL / MySQL / Redis ในหน้าต่อฐานข้อมูล พร้อม port เริ่มต้นตามชนิด
-- OpenVPN แยกต่อ connection ผ่าน Docker Desktop: สวิตช์เปิด/ปิด, โปรไฟล์/default แยกแต่ละฐานข้อมูล, ดูสถานะ, Test route และ Reconnect โดยไม่เปลี่ยน routing/DNS ของเครื่อง ดูวิธีใช้และข้อจำกัดใน [Connection workspaces](docs/CONNECTIONS.md#openvpn-แยกต่อฐานข้อมูล)
+- OpenVPN ในตัวแอป แยกต่อ connection โดยไม่ต้องใช้ Docker: สวิตช์เปิด/ปิด, โปรไฟล์/default แยกแต่ละฐานข้อมูล, ดูสถานะ, Test route และ Reconnect โดยไม่เปลี่ยน routing/DNS ของเครื่อง ดูวิธีใช้และข้อจำกัดใน [Connection workspaces](docs/CONNECTIONS.md#openvpn-แยกต่อฐานข้อมูล)
 - MySQL: ตารางหลายแท็บ, filter/sort, SQL SELECT, EXPLAIN, structure, indexes และ overview; ไม่บังคับชื่อ database ตอนเชื่อมต่อ กด + เพื่อเปิดตารางในแต่ละ database; บัญชี admin ใช้อ่านได้ด้วย
 - Redis: SCAN คีย์ตาม pattern, ดูค่า/ชนิด/TTL, อ่าน string/hash/list/set/sorted set และรันคำสั่งอ่านแบบ JSON arguments
 - เชื่อมทั้งสามชนิดด้วย verified TLS หรือ plaintext เฉพาะ literal loopback IP; PostgreSQL และ MySQL มีโหมด TLS แบบไม่ตรวจใบรับรองที่ต้องเลือกเอง และรองรับ CA PEM ส่วนตัว

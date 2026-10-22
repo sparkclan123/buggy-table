@@ -47,6 +47,7 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/build-vpn
       - run: node scripts/version.mjs --check
       - run: rustup target add ${{ matrix.target }}
       - run: pnpm check

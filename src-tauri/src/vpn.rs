@@ -1,5 +1,5 @@
 //! Isolated, device-local OpenVPN profiles. Secrets never enter bookmarks or logs.
-mod docker;
+mod engine;
 pub mod runtime;
 pub mod store;
 
@@ -86,7 +86,7 @@ pub fn failure(code: &'static str, message: &str) -> AppError {
 
 /// A deliberately bounded client profile format. OpenVPN files can otherwise
 /// execute programs, load plugins, include arbitrary files or replace management.
-/// Imported scripts are never executed, even inside the isolated container.
+/// Imported scripts are never executed, even inside the isolated process.
 pub fn validate_config(config: &str) -> AppResult<String> {
     if config.len() > 512 * 1024 || config.contains('\0') {
         return Err(failure(

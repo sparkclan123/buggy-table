@@ -1,16 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from 'svelte';
-  import {
-    Plus,
-    Pencil,
-    Trash2,
-    X,
-    Shield,
-    RotateCw,
-    Activity,
-    Check,
-    LoaderCircle,
-  } from '@lucide/svelte';
+  import { onMount, untrack } from 'svelte';
+  import { Plus, Pencil, Trash2, X, Shield, RotateCw, Activity, Check } from '@lucide/svelte';
   import { api, errorMessage } from '../lib/api';
   import VpnSwitch from './VpnSwitch.svelte';
   import type {
@@ -51,10 +41,6 @@
   let busy = $state(true);
   let message = $state('Loading VPN settings…');
   let error = $state('');
-  let preparing = $state(false);
-  let prepareSeconds = $state(0);
-  let prepareTimer: ReturnType<typeof setInterval> | undefined;
-  onDestroy(() => clearInterval(prepareTimer));
   let editing = $state<VpnProfile | null>(null);
   let editor = $state(false);
   let profileName = $state('');
@@ -172,30 +158,6 @@
       busy = false;
     }
   }
-  async function prepare() {
-    busy = true;
-    preparing = true;
-    prepareSeconds = 0;
-    prepareTimer = setInterval(() => (prepareSeconds += 1), 1000);
-    error = '';
-    message = '';
-    try {
-      await api.prepareVpn();
-      runtime = await api.vpnRuntime();
-    } catch (e) {
-      error = errorMessage(e);
-      try {
-        runtime = await api.vpnRuntime();
-      } catch {
-        // Retain the setup error if Docker is no longer reachable.
-      }
-    } finally {
-      clearInterval(prepareTimer);
-      preparing = false;
-      busy = false;
-      message = '';
-    }
-  }
   async function checkRuntime() {
     busy = true;
     error = '';
@@ -268,7 +230,7 @@
       onclick={onclose}><X size={18} /></button
     >
   </div>
-  <p class="muted small">OpenVPN · isolated per connection · Docker Desktop</p>
+  <p class="muted small">Built-in OpenVPN · isolated per connection</p>
   {#if status && online}
     <div class="vpn-health" role="status">
       <div>
@@ -447,38 +409,20 @@
     {#if runtime}<div class="vpn-runtime" class:ready={runtime.prepared}>
         <div class="vpn-runtime-copy">
           <strong>
-            {#if preparing}<LoaderCircle size={14} class="vpn-preparing-icon" />
-            {:else if runtime.prepared}<Check size={14} />
-            {:else}<Shield size={14} />{/if}
-            {preparing
-              ? 'Preparing OpenVPN'
-              : runtime.prepared
-                ? 'OpenVPN ready'
-                : runtime.available
-                  ? 'Setup required'
-                  : 'Docker unavailable'}
+            {#if runtime.prepared}<Check size={14} />{:else}<Shield size={14} />{/if}
+            {runtime.prepared ? 'OpenVPN ready' : 'VPN engine unavailable'}
           </strong>
-          <span class="muted">
-            {preparing
-              ? `Downloading and building the runtime · ${prepareSeconds}s. First setup can take several minutes.`
-              : runtime.message}
-          </span>
+          <span class="muted">{runtime.message}</span>
         </div>
         <div class="vpn-runtime-actions">
           <button
             type="button"
             class="icon-button vpn-icon"
-            aria-label="Check Docker again"
-            title="Check Docker again"
+            aria-label="Check VPN engine again"
+            title="Check VPN engine again"
             disabled={busy}
             onclick={checkRuntime}><RotateCw size={14} /></button
           >
-          {#if !runtime.prepared}<button
-              type="button"
-              class="secondary-button"
-              disabled={busy || !runtime.available}
-              onclick={prepare}>{preparing ? 'Preparing…' : 'Prepare VPN'}</button
-            >{/if}
         </div>
       </div>{/if}
     <p class="muted small">

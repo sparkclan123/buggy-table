@@ -14,6 +14,12 @@ verify_app() {
   codesign --verify --deep --strict --verbose=2 "$app"
   # A linker-only signature does not seal the bundle's resources.
   test -f "$app/Contents/_CodeSignature/CodeResources"
+  # Exercise the actual packaged sidecar without developer PATH or Docker.
+  env -i PATH=/usr/bin:/bin "$app/Contents/MacOS/buggy-vpn" --self-test
+  if otool -L "$app/Contents/MacOS/buggy-vpn" | grep -E '/opt/homebrew|/usr/local|vcpkg|artifacts'; then
+    echo "VPN engine contains a developer-machine library dependency" >&2
+    exit 1
+  fi
   if [ "$mode" = signed ]; then
     codesign --display --verbose=4 "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'
     xcrun stapler validate "$app"

@@ -5,6 +5,7 @@
 Requires a local Docker engine with Linux containers and OpenSSL. These fixtures generate two-day test certificates and start two disposable VPN/PostgreSQL servers. Both expose `vpn-db.test / 10.77.0.1` in independent VPN networks. No user VPN profile is read. The integration test stops fixture A to test failure isolation.
 
 ```sh
+python3 scripts/build-vpn.py
 python3 scripts/vpn-fixtures.py start
 cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features vpn-integration --test vpn_integration -- --ignored --nocapture
 python3 scripts/vpn-fixtures.py stop
@@ -12,7 +13,18 @@ python3 scripts/vpn-fixtures.py stop
 
 The opt-in feature keeps this test separate from the usual Compose database suite. Generated keys/profiles remain under ignored `artifacts/vpn-fixtures`; do not distribute them. Recreate fixtures after certificate expiry. CI runs this in a separate Linux job; desktop packaging and credential storage need their own Mac/Windows checks.
 
-Runtime sources in `src-tauri/vpn` are embedded into the native binary. Their content hash determines the local image tag. Editing them causes the next Prepare/connect to build a new image. App containers publish only an authenticated relay on loopback, use a private tmpfs for OpenVPN credentials, and have no host mounts or Docker socket. `SO_BINDTODEVICE` and a terminating routing policy bind every database/DNS socket to the tunnel. The normal container network is used only for OpenVPN transport and the local relay. Full tunnel pushes cannot alter host routing/DNS.
+The installed app does not use Docker. Build its native sidecar before `pnpm desktop` or `pnpm desktop:build`:
+
+```sh
+# macOS: brew install cmake openssl@3; Linux: install cmake and libssl-dev
+python3 scripts/build-vpn.py
+```
+
+Windows uses CMake/MSVC and static OpenSSL (`vcpkg install openssl:x64-windows-static`, then pass `--openssl <prefix>`). Dependencies are fetched at build time with pinned SHA-256 checksums in `native/vpn/deps.json`; generated binaries/notices go in ignored `src-tauri/binaries`. Tauri packages the architecture-specific sidecar next to the app executable. No end-user build tools or downloads are needed.
+
+`native/vpn` combines OpenVPN 3's external-TUN interface with a process-private lwIP stack. All database TCP and private DNS packets enter that memory interface, never a host socket. Only VPN transport and the authenticated fixed-destination loopback relay use native sockets. No OS interfaces, routes, DNS settings or privileged helper are created. A process is owned by one session; stdin EOF, heartbeat expiry or process drop ends it. Source and dependency license notices are bundled. OpenVPN 3 is used under MPL-2.0; its unmodified pinned source URL is recorded in the notices.
+
+`python3 scripts/build-vpn.py --sanitize` builds an ASan/UBSan engine. Use `BUGGY_VPN_BINARY=<absolute path to artifacts/native-vpn/asan/buggy-vpn>` with the opt-in integration suite. Docker is used only to host the disposable VPN/database servers in tests; the application client runs natively without access to Docker.
 
 ## Principles
 

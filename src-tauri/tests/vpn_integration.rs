@@ -16,7 +16,11 @@ fn profile(index: u8) -> (VpnProfile, VpnSecrets) {
             id: Uuid::new_v4().to_string(),
             owner: Uuid::new_v4().to_string(),
             name: format!("Fixture {index}"),
-            username: String::new(),
+            username: if index == 1 {
+                "vpn-fixture-user".into()
+            } else {
+                String::new()
+            },
             dns: vec![],
             has_password: false,
             has_key_password: false,
@@ -26,7 +30,11 @@ fn profile(index: u8) -> (VpnProfile, VpnSecrets) {
                 &std::fs::read_to_string(fixture().join(format!("client-{index}.ovpn"))).unwrap(),
             )
             .unwrap(),
-            password: String::new(),
+            password: if index == 1 {
+                "vpn-fixture-password".into()
+            } else {
+                String::new()
+            },
             key_password: String::new(),
         },
     )
@@ -57,7 +65,7 @@ fn query(id: &str) -> QueryRequest {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires disposable OpenVPN fixtures and local Docker Desktop"]
+#[ignore = "requires bundled engine and disposable VPN servers (Docker is only the test server host)"]
 async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
     let runtime = VpnRuntime::default();
     runtime.prepare().await.unwrap();
@@ -95,6 +103,14 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
     let qb = workbench.query(query(&b.id)).await.unwrap();
     assert_eq!(qa.rows[0][1].as_deref(), Some("A"));
     assert_eq!(qb.rows[0][1].as_deref(), Some("B"));
+    // Stream a result larger than the TCP window. This exercises backpressure,
+    // packet segmentation and TLS across repeated reads, not just tiny queries.
+    let mut large = query(&b.id);
+    large.sql = "SELECT id, payload FROM public.large_payload ORDER BY id".into();
+    let large_started = Instant::now();
+    let result = workbench.query(large).await.unwrap();
+    assert_eq!(result.rows[0][1].as_ref().unwrap(), &"B".repeat(500000));
+    eprintln!("Large TLS result: {:?}", large_started.elapsed());
     let mut switches = vec![];
     for _ in 0..15 {
         // Alternate the two already-connected networks, including overlapping
@@ -141,6 +157,29 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
             .is_err()
     );
     drop(wrong);
+    // Changing network creates a fresh native process, while old sessions keep
+    // their own stack/DNS. The replacement must not tear down either route.
+    let (replacement, secret) = profile(1);
+    let replacement = runtime
+        .start(replacement, secret, "vpn-db.test", 5432)
+        .await
+        .unwrap();
+    let replaced = workbench
+        .connect_route(
+            request("vpn-db.test"),
+            Some(replacement.clone()),
+            Some(&b.id),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        workbench.query(query(&replaced.id)).await.unwrap().rows[0][1].as_deref(),
+        Some("B")
+    );
+    let b = replaced;
+    drop(route_b);
+    let route_b = replacement;
     // Failed replacement preserves the old session and its network.
     let mut invalid = request("vpn-db.test");
     invalid.password = "wrong".into();
@@ -150,6 +189,15 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
             .await
             .is_err()
     );
+    let result_b = workbench.query(query(&b.id)).await;
+    assert!(
+        result_b.is_ok(),
+        "B query: {result_b:?}; tunnel: {}",
+        route_b.status().message
+    );
+    // Cover heartbeat, DNS, IPv6 reassembly and TCP timers on 64-bit hosts.
+    tokio::time::sleep(std::time::Duration::from_secs(9)).await;
+    assert!(workbench.query(query(&a.id)).await.is_ok());
     assert!(workbench.query(query(&b.id)).await.is_ok());
     // Remove only the disposable VPN server. A must stop; B remains usable.
     let status = std::process::Command::new("docker")
@@ -158,7 +206,12 @@ async fn isolated_vpns_keep_dns_tls_sessions_and_fail_closed() {
         .unwrap();
     assert!(status.success());
     assert!(workbench.query(query(&a.id)).await.is_err());
-    assert!(workbench.query(query(&b.id)).await.is_ok());
+    let result_b = workbench.query(query(&b.id)).await;
+    assert!(
+        result_b.is_ok(),
+        "B query: {result_b:?}; tunnel: {}",
+        route_b.status().message
+    );
     assert_ne!(
         workbench.vpn_status(&a.id, true).await.unwrap().state,
         "ready"

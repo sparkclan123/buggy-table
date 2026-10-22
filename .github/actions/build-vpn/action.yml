@@ -1,0 +1,26 @@
+name: Build bundled VPN
+description: Build a static OpenVPN/lwIP engine; no Docker dependency in the installed app
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install native build tools (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install cmake openssl@3
+    - name: Install native build tools (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev
+    - name: Build static OpenSSL (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows-static
+        if ($LASTEXITCODE -ne 0) { throw 'Static OpenSSL build failed' }
+        "OPENSSL_ROOT_DIR=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static" >> $env:GITHUB_ENV
+    - name: Build and verify bundled engine
+      shell: bash
+      run: python scripts/build-vpn.py

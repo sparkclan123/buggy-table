@@ -354,45 +354,36 @@ test('VPN controls fit a small desktop window in both themes', async ({ page }, 
   }
 });
 
-test('VPN setup can recheck Docker, explain a failure and retry to ready', async ({ page }) => {
+test('built-in VPN is ready without Docker or setup and can recheck a missing engine', async ({
+  page,
+}) => {
   await setup(page);
   await page.evaluate(() => {
     (window as unknown as Record<string, unknown>).vpnRuntime = {
       available: false,
       prepared: false,
-      message: 'Open Docker Desktop with Linux containers.',
+      message:
+        'The bundled VPN engine is missing. Reinstall the latest app. Docker is not required.',
     };
   });
   await page.getByRole('button', { name: 'VPN settings for Alpha', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'VPN settings for Alpha' });
-  await expect(dialog.getByText('Docker unavailable', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toBeDisabled();
-  await page.evaluate(() => {
-    const target = window as unknown as Record<string, unknown>;
-    target.vpnRuntime = { available: true, prepared: false, message: 'Prepare the runtime.' };
-    target.vpnPrepareError =
-      "Docker's credential helper could not be found. Repair or update Docker Desktop.";
-  });
-  await dialog.getByRole('button', { name: 'Check Docker again' }).click();
-  await dialog.getByRole('button', { name: 'Prepare VPN', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toContainText('credential helper could not be found');
-  await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toBeEnabled();
-  await page.evaluate(() => {
-    const target = window as unknown as Record<string, unknown>;
-    target.vpnPrepareError = '';
-    target.vpnPrepareWait = true;
-  });
-  await dialog.getByRole('button', { name: 'Prepare VPN', exact: true }).click();
-  await expect(dialog).toHaveAttribute('aria-busy', 'true');
-  await expect(dialog.getByText('Preparing OpenVPN', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Preparing…', exact: true })).toBeDisabled();
-  await expect(dialog.getByRole('alert')).toHaveCount(0);
-  await page.evaluate(() =>
-    (window as unknown as { finishVpnPrepare: () => void }).finishVpnPrepare(),
-  );
-  await expect(dialog.getByText('OpenVPN ready', { exact: true })).toBeVisible();
-  await expect(dialog).toHaveAttribute('aria-busy', 'false');
+  await expect(dialog.getByText('VPN engine unavailable', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Prepare VPN', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start Docker', exact: true })).toHaveCount(0);
+  await page.evaluate(() => {
+    (window as unknown as Record<string, unknown>).vpnRuntime = {
+      available: true,
+      prepared: true,
+      message: 'Built-in OpenVPN ready. No Docker or additional installation needed.',
+    };
+  });
+  await dialog.getByRole('button', { name: 'Check VPN engine again' }).click();
+  await expect(dialog.getByText('OpenVPN ready', { exact: true })).toBeVisible();
+  const calls = await page.evaluate(
+    () => (window as unknown as { vpnCalls: { command: string }[] }).vpnCalls,
+  );
+  expect(calls.some((call) => call.command === 'prepare_vpn')).toBe(false);
 });
 
 test('VPN switch stays inside its track and supports the keyboard in both themes', async ({
