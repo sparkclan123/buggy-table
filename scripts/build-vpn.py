@@ -54,12 +54,12 @@ def main():
         marker.write_text(spec['sha256'])
     build = CACHE / ('asan' if args.sanitize else 'build')
     command = ['cmake', '-S', str(SOURCE), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
-               '-DVPN_DEPS=' + str(deps), '-DVPN_SANITIZE=' + ('ON' if args.sanitize else 'OFF')]
+               '-DVPN_DEPS=' + deps.as_posix(), '-DVPN_SANITIZE=' + ('ON' if args.sanitize else 'OFF')]
     openssl = args.openssl or os.environ.get('OPENSSL_ROOT_DIR')
     if not openssl and platform.system() == 'Darwin':
         openssl = subprocess.check_output(['brew', '--prefix', 'openssl@3'], text=True).strip()
     if openssl:
-        command += ['-DOPENSSL_ROOT_DIR=' + openssl]
+        command += ['-DOPENSSL_ROOT_DIR=' + Path(openssl).as_posix()]
     subprocess.run(command, check=True)
     subprocess.run(['cmake', '--build', str(build), '--config', 'Release', '--parallel', '3'], check=True)
     suffix = '.exe' if platform.system() == 'Windows' else ''

@@ -89,6 +89,10 @@ jobs:
           foreach ($file in $files) {
             if ((Get-AuthenticodeSignature $file).Status -ne 'Valid') { throw "Invalid Authenticode signature: $file" }
           }
+      - name: Verify installed Windows VPN engine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-windows-bundle.ps1 src-tauri/target/${{ matrix.target }}/release/bundle
       - run: node scripts/release-assets.mjs collect ${{ matrix.platform }} src-tauri/target/${{ matrix.target }}/release/bundle artifacts/${{ matrix.platform }}
       - run: cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --example verify_release -- artifacts/${{ matrix.platform }}
       - uses: actions/upload-artifact@v4

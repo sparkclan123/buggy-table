@@ -22,6 +22,7 @@ extern "C" {
 #include <deque>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <thread>
 
 using Clock = std::chrono::steady_clock;
@@ -49,6 +50,20 @@ static bool safe_ip(const ip_addr_t& ip) {
     if (ip_addr_isany(&ip) || ip_addr_ismulticast(&ip) || ip_addr_isloopback(&ip)) return false;
     if (IP_IS_V4(&ip) && ip4_addr_get_u32(ip_2_ip4(&ip)) == PP_HTONL(0xffffffffUL)) return false;
     return true;
+}
+static bool requests_aes_cbc(const std::string& profile) {
+    std::istringstream lines(profile);
+    for (std::string line; std::getline(lines, line);) {
+        std::istringstream directive(line);
+        std::string name, value;
+        directive >> name >> value;
+        if (name.starts_with("--")) name.erase(0, 2);
+        if (name != "cipher" && name != "data-ciphers" && name != "data-ciphers-fallback") continue;
+        std::istringstream ciphers(value);
+        for (std::string cipher; std::getline(ciphers, cipher, ':');)
+            if (cipher == "AES-128-CBC" || cipher == "AES-192-CBC" || cipher == "AES-256-CBC") return true;
+    }
+    return false;
 }
 
 struct Settings {
@@ -415,6 +430,7 @@ int main(int argc, char** argv) {
             if (!ipaddr_aton("10.77.0.1", &ip) || !safe_ip(ip)) return 1;
             Client client;
             vpn_random();
+            if (!requests_aes_cbc("cipher AES-256-CBC\n") || requests_aes_cbc("# cipher AES-256-CBC\ncipher AES-256-GCM\n")) return 1;
             std::cout << "buggy-vpn protocol 1; OpenVPN 3.11.8; lwIP 2.2.1; " << OpenSSL_version(OPENSSL_VERSION) << std::endl;
             return 0;
         }
@@ -438,6 +454,9 @@ int main(int argc, char** argv) {
         config.connTimeout = 45; config.clockTickMS = 1000;
         config.googleDnsFallback = false; config.retryOnAuthFailed = false;
         config.dco = false; config.tunPersist = false;
+        // Preserve explicitly requested AES-CBC profiles without enabling legacy
+        // 64-bit block ciphers, old TLS versions or unverified certificates.
+        config.enableNonPreferredDCAlgorithms = requests_aes_cbc(config.content);
         auto evaluated = client.eval_config(config);
         if (evaluated.error) { emit("disconnected", "VPN_CONFIG"); return 1; }
         ClientAPI::ProvideCreds credentials;
