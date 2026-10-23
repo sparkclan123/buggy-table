@@ -350,7 +350,10 @@ test('same-named tables in separate schemas retain tabs and save to their owning
 }) => {
   await start(page);
   await page.getByRole('combobox', { name: 'Select PostgreSQL schema' }).selectOption('audit');
-  await page.getByRole('button', { name: 'items', exact: true }).click();
+  await page
+    .getByLabel('Tables in fixture.audit')
+    .getByRole('button', { name: 'items', exact: true })
+    .click();
   await expect(page.getByRole('tab', { name: 'items · audit', exact: true })).toBeVisible();
   await editCell(page, 1, 'label');
   await page.getByRole('textbox', { name: 'Cell value row 1 label' }).fill('Audit changed');
@@ -465,14 +468,14 @@ test('tab drag autoscrolls an overflowing strip and persists only tab identities
       ).persistedProfiles.find((p) => p.id === 'a')!.layout,
   );
   expect(saved.tabs).toEqual([
-    { schema: 'public', table: 'json_items' },
-    { schema: 'public', table: 'report_view' },
-    { schema: 'audit', table: 'items' },
-    { schema: 'audit', table: 'json_items' },
-    { schema: 'audit', table: 'report_view' },
-    { schema: 'public', table: 'items' },
+    { database: 'fixture', schema: 'public', table: 'json_items' },
+    { database: 'fixture', schema: 'public', table: 'report_view' },
+    { database: 'fixture', schema: 'audit', table: 'items' },
+    { database: 'fixture', schema: 'audit', table: 'json_items' },
+    { database: 'fixture', schema: 'audit', table: 'report_view' },
+    { database: 'fixture', schema: 'public', table: 'items' },
   ]);
-  expect(saved.activeTab).toBe(JSON.stringify(['public', 'items']));
+  expect(saved.activeTab).toBe(JSON.stringify(['fixture', 'public', 'items']));
   expect(JSON.stringify(saved)).not.toContain('Reordered draft');
 });
 

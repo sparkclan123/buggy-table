@@ -96,3 +96,41 @@ INSERT INTO audit.edit_items VALUES (1, 'Audit only');
 GRANT SELECT ON audit.edit_items TO tablepor_reader, tablepor_editor;
 GRANT UPDATE(label) ON audit.edit_items TO tablepor_editor;
 CREATE TABLE restricted.edit_items (id bigint PRIMARY KEY, label text);
+
+-- Server browsing fixtures: isolated databases with deliberately identical tables.
+REVOKE CONNECT, TEMP ON DATABASE postgres FROM PUBLIC;
+REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;
+GRANT CONNECT ON DATABASE postgres TO tablepor_reader, tablepor_editor;
+CREATE ROLE tablepor_fallback LOGIN PASSWORD 'local-fallback-only';
+CREATE ROLE tablepor_no_bootstrap LOGIN PASSWORD 'local-no-bootstrap';
+CREATE DATABASE tablepor_fallback;
+CREATE DATABASE tablepor_other;
+CREATE DATABASE "odd "" database";
+CREATE DATABASE tablepor_hidden;
+REVOKE CONNECT ON DATABASE tablepor_hidden FROM PUBLIC;
+CREATE DATABASE tablepor_disabled ALLOW_CONNECTIONS false;
+CREATE TABLE public.multi_db_items (id integer PRIMARY KEY, label text NOT NULL);
+INSERT INTO public.multi_db_items VALUES (1, 'original database');
+GRANT SELECT ON public.multi_db_items TO tablepor_reader, tablepor_editor;
+GRANT UPDATE(label), INSERT, DELETE ON public.multi_db_items TO tablepor_editor;
+\connect tablepor_other
+REVOKE TEMP ON DATABASE tablepor_other FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+CREATE TABLE public.multi_db_items (id integer PRIMARY KEY, label text NOT NULL);
+INSERT INTO public.multi_db_items VALUES (1, 'other database'), (2, 'second row');
+GRANT USAGE ON SCHEMA public TO tablepor_reader, tablepor_editor;
+GRANT SELECT ON public.multi_db_items TO tablepor_reader, tablepor_editor;
+GRANT UPDATE(label), INSERT, DELETE ON public.multi_db_items TO tablepor_editor;
+CREATE SCHEMA audit;
+GRANT USAGE ON SCHEMA audit TO tablepor_reader, tablepor_editor;
+CREATE TABLE audit.multi_db_items (id integer PRIMARY KEY, label text NOT NULL);
+INSERT INTO audit.multi_db_items VALUES (1, 'other audit');
+GRANT SELECT ON audit.multi_db_items TO tablepor_reader, tablepor_editor;
+GRANT UPDATE(label) ON audit.multi_db_items TO tablepor_editor;
+\connect "odd "" database"
+REVOKE TEMP ON DATABASE "odd "" database" FROM PUBLIC;
+CREATE TABLE public.multi_db_items (id integer PRIMARY KEY, label text NOT NULL);
+INSERT INTO public.multi_db_items VALUES (1, 'quoted database');
+GRANT USAGE ON SCHEMA public TO tablepor_reader, tablepor_editor;
+GRANT SELECT ON public.multi_db_items TO tablepor_reader, tablepor_editor;
+\connect tablepor_test

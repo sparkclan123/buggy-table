@@ -128,6 +128,8 @@ pub struct ConnectionInfo {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueryRequest {
     #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
     pub schema: Option<String>,
     pub connection_id: String,
     pub request_id: String,
@@ -191,6 +193,8 @@ pub enum FilterMatch {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowseRequest {
+    #[serde(default)]
+    pub database: Option<String>,
     #[serde(default)]
     pub schema: Option<String>,
     pub connection_id: String,
@@ -262,6 +266,8 @@ pub struct Overview {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveRequest {
+    #[serde(default)]
+    pub database: Option<String>,
     #[serde(default)]
     pub schema: Option<String>,
     pub connection_id: String,

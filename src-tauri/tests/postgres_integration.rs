@@ -29,6 +29,7 @@ fn request() -> ConnectRequest {
 
 fn query(connection_id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        database: None,
         schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
@@ -39,6 +40,7 @@ fn query(connection_id: &str, sql: &str) -> QueryRequest {
 
 fn browse(connection_id: &str) -> BrowseRequest {
     BrowseRequest {
+        database: None,
         schema: None,
         connection_id: connection_id.into(),
         request_id: Uuid::new_v4().to_string(),
@@ -257,6 +259,7 @@ async fn save_trigger_session_changes_cannot_contaminate_reused_reads() {
     let info = app.connect(settings).await.unwrap();
     let pid: i32 = admin.query_one("SELECT pid FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_editor'", &[]).await.unwrap().get(0);
     let save = SaveRequest {
+        database: None,
         connection_id: info.id.clone(),
         request_id: Uuid::new_v4().to_string(),
         schema: Some(schema.clone()),
@@ -876,6 +879,7 @@ fn editor_request() -> ConnectRequest {
 }
 async fn editable_rows(app: &Workbench, id: &str, table: &str) -> QueryResult {
     app.browse(BrowseRequest {
+        database: None,
         schema: None,
         table: table.into(),
         ..browse(id)
@@ -898,6 +902,7 @@ fn edit(result: &QueryResult, index: usize, column: &str, value: Option<&str>) -
 }
 fn save(id: &str, table: &str, rows: Vec<RowChange>) -> SaveRequest {
     SaveRequest {
+        database: None,
         schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
@@ -1486,6 +1491,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
     let data = app.browse(browse_audit).await.unwrap();
     assert_eq!(data.rows[0][1].as_deref(), Some("Audit only"));
     let mut update = SaveRequest {
+        database: None,
         connection_id: first.id.clone(),
         request_id: Uuid::new_v4().to_string(),
         schema: Some("audit".into()),
@@ -1529,6 +1535,7 @@ async fn multiple_connections_and_schemas_keep_reads_and_saves_isolated() {
             .is_empty()
     );
     update = SaveRequest {
+        database: None,
         connection_id: first.id.clone(),
         request_id: Uuid::new_v4().to_string(),
         schema: Some("audit".into()),
@@ -1819,4 +1826,254 @@ async fn inserts_distinguish_default_null_and_required_keys_and_enforce_limits()
         .await
         .unwrap();
     task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn server_browsing_routes_reads_counts_indexes_and_saves_to_the_selected_database() {
+    let app = Workbench::default();
+    let mut req = request();
+    req.database.clear();
+    req.username = "tablepor_editor".into();
+    req.password = "local-editor-only".into();
+    req.manual_edits = true;
+    let info = app.connect(req).await.unwrap();
+    assert!(info.database.is_empty());
+    assert!(
+        info.tables.is_empty(),
+        "server connect must not fetch every schema"
+    );
+    let names = app.databases(&info.id).await.unwrap();
+    assert!(names.contains(&"tablepor_other".into()));
+    assert!(names.contains(&"odd \" database".into()));
+    for hidden in [
+        "template0",
+        "template1",
+        "tablepor_hidden",
+        "tablepor_disabled",
+    ] {
+        assert!(!names.contains(&hidden.into()));
+    }
+    let schemas = app
+        .schemas_in_database(&info.id, Some("tablepor_other"))
+        .await
+        .unwrap();
+    assert!(schemas.contains(&"audit".into()));
+    let catalog = app
+        .tables_in_database(&info.id, "public", Some("tablepor_other"))
+        .await
+        .unwrap();
+    assert!(
+        catalog.iter().any(|t| t.name == "multi_db_items"
+            && t.columns.iter().any(|c| c.name == "label" && c.editable))
+    );
+    for (database, schema, label, count) in [
+        ("tablepor_test", "public", "original database", "1"),
+        ("tablepor_other", "public", "other database", "2"),
+        ("odd \" database", "public", "quoted database", "1"),
+        ("tablepor_other", "audit", "other audit", "1"),
+    ] {
+        let mut read = browse(&info.id);
+        read.database = Some(database.into());
+        read.schema = Some(schema.into());
+        read.table = "multi_db_items".into();
+        let result = app.browse(read).await.unwrap();
+        assert_eq!(result.rows[0][1].as_deref(), Some(label));
+        let mut sql = query(
+            &info.id,
+            &format!("SELECT label FROM {schema}.multi_db_items ORDER BY id LIMIT 1"),
+        );
+        sql.database = Some(database.into());
+        sql.schema = Some(schema.into());
+        let result = app.query(sql).await.unwrap();
+        assert_eq!(result.rows[0][0].as_deref(), Some(label));
+        assert!(result.timings.unwrap().connection_reused);
+        let mut count_req = browse(&info.id);
+        count_req.database = Some(database.into());
+        count_req.schema = Some(schema.into());
+        count_req.table = "multi_db_items".into();
+        assert_eq!(app.count(count_req).await.unwrap().rows, count);
+        assert!(
+            !app.indexes_in_database(&info.id, "multi_db_items", Some(schema), Some(database))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            app.overview_in_database(&info.id, Some(database))
+                .await
+                .unwrap()
+                .database,
+            database
+        );
+    }
+    // Returning to either database reuses its own physical connection.
+    for database in [
+        "tablepor_test",
+        "tablepor_other",
+        "tablepor_test",
+        "tablepor_other",
+    ] {
+        let mut r = query(&info.id, "SELECT 1");
+        r.database = Some(database.into());
+        assert!(
+            app.query(r)
+                .await
+                .unwrap()
+                .timings
+                .unwrap()
+                .connection_reused
+        );
+    }
+    let mut change = save(
+        &info.id,
+        "multi_db_items",
+        vec![RowChange {
+            insert: false,
+            delete: false,
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("other database".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("edited other".into()))].into(),
+        }],
+    );
+    change.database = Some("tablepor_other".into());
+    change.schema = Some("public".into());
+    assert_eq!(app.save(change).await.unwrap().updated_rows, 1);
+    for (database, expected) in [
+        ("tablepor_other", "edited other"),
+        ("tablepor_test", "original database"),
+    ] {
+        let mut r = query(
+            &info.id,
+            "SELECT label FROM public.multi_db_items WHERE id = 1",
+        );
+        r.database = Some(database.into());
+        assert_eq!(
+            app.query(r).await.unwrap().rows[0][0].as_deref(),
+            Some(expected)
+        );
+    }
+    let mut restore = save(
+        &info.id,
+        "multi_db_items",
+        vec![RowChange {
+            insert: false,
+            delete: false,
+            original: [
+                ("id".into(), Some("1".into())),
+                ("label".into(), Some("edited other".into())),
+            ]
+            .into(),
+            changes: [("label".into(), Some("other database".into()))].into(),
+        }],
+    );
+    restore.database = Some("tablepor_other".into());
+    app.save(restore).await.unwrap();
+    // Named database errors never fall back to another database.
+    for database in ["missing_database", "tablepor_hidden", "", "bad\0name"] {
+        let mut r = query(&info.id, "SELECT 1");
+        r.database = Some(database.into());
+        assert!(app.query(r).await.is_err());
+    }
+    let mut r = query(&info.id, "SELECT 1");
+    r.database = Some("tablepor_test".into());
+    assert!(
+        app.query(r)
+            .await
+            .unwrap()
+            .timings
+            .unwrap()
+            .connection_reused
+    );
+    // Touch five databases: at most four idle server sessions survive.
+    for database in [
+        "postgres",
+        "tablepor_test",
+        "tablepor_other",
+        "odd \" database",
+        "tablepor_fallback",
+    ] {
+        let mut r = query(&info.id, "SELECT 1");
+        r.database = Some(database.into());
+        app.query(r).await.unwrap();
+    }
+    let (admin, task) = admin().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let count: i64 = admin.query_one("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_editor'", &[]).await.unwrap().get(0);
+            if count <= 4 { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+    app.disconnect(&info.id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let count: i64 = admin.query_one("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'table-por' AND usename = 'tablepor_editor'", &[]).await.unwrap().get(0);
+            if count == 0 { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the disposable Compose fixture"]
+async fn optional_database_discovery_has_bounded_fallback_and_keeps_strict_reader_checks() {
+    let app = Workbench::default();
+    let mut req = request();
+    req.database.clear();
+    let info = app.connect(req).await.unwrap();
+    assert!(
+        app.databases(&info.id)
+            .await
+            .unwrap()
+            .contains(&"tablepor_test".into())
+    );
+    let mut r = query(
+        &info.id,
+        "SELECT label FROM public.multi_db_items WHERE id = 1",
+    );
+    r.database = Some("tablepor_other".into());
+    assert_eq!(
+        app.query(r).await.unwrap().rows[0][0].as_deref(),
+        Some("other database")
+    );
+    // This database still has TEMP privileges: switching must re-run reader policy.
+    let mut r = query(&info.id, "SELECT 1");
+    r.database = Some("tablepor_fallback".into());
+    assert!(app.query(r).await.is_err());
+    app.disconnect(&info.id).await.unwrap();
+    let mut req = request();
+    req.database.clear();
+    req.username = "tablepor_fallback".into();
+    req.password = "local-fallback-only".into();
+    req.manual_edits = true;
+    let info = app.connect(req).await.unwrap();
+    assert_eq!(
+        app.overview(&info.id).await.unwrap().database,
+        "tablepor_fallback"
+    );
+    app.disconnect(&info.id).await.unwrap();
+    let mut req = request();
+    req.database.clear();
+    req.username = "tablepor_no_bootstrap".into();
+    req.password = "local-no-bootstrap".into();
+    req.manual_edits = true;
+    assert_eq!(
+        app.connect(req.clone()).await.unwrap_err().code,
+        "DATABASE_REQUIRED"
+    );
+    req.database = "tablepor_other".into();
+    let info = app.connect(req).await.unwrap();
+    app.disconnect(&info.id).await.unwrap();
+    let mut req = request();
+    req.database.clear();
+    req.password = "incorrect-fixture-password".into();
+    assert_eq!(
+        app.connect(req).await.unwrap_err().code,
+        "CONNECTION_FAILED"
+    );
 }

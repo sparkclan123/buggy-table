@@ -1,7 +1,10 @@
 import type { Filter, FilterMatch, IndexInfo, QueryResult, RowChange, TableInfo } from './types';
 import { quoteIdentifier } from './api';
 
-export const tableKey = (schema: string, table: string) => JSON.stringify([schema, table]);
+export const tableKey = (schema: string, table: string, database?: string) =>
+  JSON.stringify(database ? [database, schema, table] : [schema, table]);
+export const schemaKey = (schema: string, database?: string) =>
+  database ? JSON.stringify([database, schema]) : schema;
 
 export type TableView = 'data' | 'structure' | 'indexes' | 'sql';
 export type CellEdits = Record<number, Record<string, string | null>>;
@@ -13,7 +16,8 @@ type DraftAction =
   | { kind: 'insert'; rows: DraftRow[] };
 export function createWorkspace(table?: TableInfo, engine = 'postgres') {
   return {
-    id: table ? tableKey(table.schema, table.name) : 'empty',
+    id: table ? tableKey(table.schema, table.name, table.database) : 'empty',
+    database: table?.database,
     schema: table?.schema ?? '',
     selectedName: table?.name ?? '',
     tab: (table?.readBlockedReason ? 'structure' : table ? 'data' : 'sql') as TableView,

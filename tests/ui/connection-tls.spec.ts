@@ -26,7 +26,7 @@ test('PostgreSQL TLS compatibility is explicit and does not leak into other engi
   await expect(security).toHaveValue('verifyFull');
   await security.selectOption('require');
   await expect(page.getByRole('note')).toContainText("server's identity is not verified");
-  await page.getByLabel('Database', { exact: true }).fill('fixture');
+  await page.getByLabel('Default database (optional)', { exact: true }).fill('fixture');
   await page.getByLabel('Username', { exact: true }).fill('reader');
   await page.getByLabel('Password', { exact: true }).fill('CANARY_SESSION_ONLY');
   await page.getByRole('button', { name: 'Connect securely' }).click();
@@ -102,7 +102,7 @@ for (const major of [15, 16, 17, 18, 19]) {
     }, major);
     await page.goto('/');
     await page.getByRole('button', { name: 'Connect database', exact: true }).click();
-    await page.getByLabel('Database', { exact: true }).fill('fixture');
+    await page.getByLabel('Default database (optional)', { exact: true }).fill('fixture');
     await page.getByLabel('Username', { exact: true }).fill('reader');
     await page.getByRole('button', { name: 'Connect securely' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);

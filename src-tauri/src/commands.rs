@@ -45,9 +45,15 @@ pub async fn inspect_table(
     connection_id: String,
     table: String,
     schema: Option<String>,
+    database: Option<String>,
 ) -> AppResult<Vec<IndexInfo>> {
     state
-        .indexes_in_schema(&connection_id, &table, schema.as_deref())
+        .indexes_in_database(
+            &connection_id,
+            &table,
+            schema.as_deref(),
+            database.as_deref(),
+        )
         .await
 }
 
@@ -55,8 +61,11 @@ pub async fn inspect_table(
 pub async fn get_overview(
     state: State<'_, Workbench>,
     connection_id: String,
+    database: Option<String>,
 ) -> AppResult<Overview> {
-    state.overview(&connection_id).await
+    state
+        .overview_in_database(&connection_id, database.as_deref())
+        .await
 }
 
 #[tauri::command]

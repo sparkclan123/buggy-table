@@ -7,6 +7,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SavedTab {
+    #[serde(default)]
+    pub database: Option<String>,
     pub schema: String,
     pub table: String,
 }
@@ -14,6 +16,8 @@ pub struct SavedTab {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileLayout {
+    #[serde(default)]
+    pub selected_database: Option<String>,
     pub selected_schema: String,
     pub tabs: Vec<SavedTab>,
     pub active_tab: String,
@@ -62,6 +66,7 @@ impl SavedConnection {
             has_password: false,
             vpn: crate::vpn::VpnSelection::default(),
             layout: ProfileLayout {
+                selected_database: None,
                 selected_schema: request.schema.clone(),
                 ..Default::default()
             },
@@ -90,7 +95,7 @@ impl SavedConnection {
             || self.port == 0
             || self.group.len() > 100
             || [&self.name, &self.host].iter().any(|s| s.is_empty())
-            || (self.engine != Engine::Mysql && self.database.is_empty())
+            || (self.engine == Engine::Redis && self.database.is_empty())
             || [
                 &self.name,
                 &self.host,
@@ -114,10 +119,17 @@ impl SavedConnection {
 
 fn validate_layout(layout: &ProfileLayout) -> AppResult<()> {
     if layout.tabs.len() > 40
+        || layout
+            .selected_database
+            .as_ref()
+            .is_some_and(|d| d.len() > 253 || d.contains('\0'))
         || layout.selected_schema.len() > 253
         || layout.active_tab.len() > 1024
         || layout.tabs.iter().any(|t| {
-            t.schema.len() > 253
+            t.database
+                .as_ref()
+                .is_some_and(|d| d.len() > 253 || d.contains('\0'))
+                || t.schema.len() > 253
                 || t.table.len() > 253
                 || t.schema.contains('\0')
                 || t.table.contains('\0')
@@ -362,17 +374,43 @@ mod tests {
         let restored = Profiles::new(dir.path().to_owned()).get(&saved.id).unwrap();
         assert!(restored.database.is_empty());
         let mut invalid = restored;
-        invalid.engine = Engine::Postgres;
+        invalid.engine = Engine::Redis;
         assert!(store.put(invalid).is_err());
     }
+    #[test]
+    fn postgres_server_bookmarks_preserve_database_scoped_tabs_and_migrate_legacy_layouts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Profiles::new(dir.path().to_owned());
+        let mut profile = fixture();
+        profile.database.clear();
+        profile.layout.selected_database = Some("other".into());
+        profile.layout.tabs = vec![SavedTab {
+            database: Some("other".into()),
+            schema: "public".into(),
+            table: "items".into(),
+        }];
+        let saved = store.put(profile).unwrap();
+        let restored = Profiles::new(dir.path().to_owned()).get(&saved.id).unwrap();
+        assert!(restored.database.is_empty());
+        assert_eq!(restored.layout.tabs[0].database.as_deref(), Some("other"));
+        let legacy: ProfileLayout = serde_json::from_str(r#"{"selectedSchema":"public","activeTab":"empty","tabs":[{"schema":"public","table":"items"}]}"#).unwrap();
+        assert!(legacy.selected_database.is_none());
+        assert!(legacy.tabs[0].database.is_none());
+        let mut invalid = restored;
+        invalid.layout.tabs[0].database = Some("bad\0name".into());
+        assert!(store.put(invalid).is_err());
+    }
+
     #[test]
     fn bookmarks_survive_restart_without_passwords_or_rows() {
         let dir = tempfile::tempdir().unwrap();
         let store = Profiles::new(dir.path().to_owned());
         let p = store.put(fixture()).unwrap();
         let layout = ProfileLayout {
+            selected_database: None,
             selected_schema: "audit".into(),
             tabs: vec![SavedTab {
+                database: None,
                 schema: "audit".into(),
                 table: "events".into(),
             }],
@@ -452,8 +490,10 @@ mod tests {
             .update(
                 &original.id,
                 ProfileLayout {
+                    selected_database: None,
                     selected_schema: "audit".into(),
                     tabs: vec![SavedTab {
+                        database: None,
                         schema: "audit".into(),
                         table: "events".into(),
                     }],

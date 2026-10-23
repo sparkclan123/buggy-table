@@ -73,6 +73,16 @@ Supported: one SELECT, explicit schema-qualified base table, plain columns/liter
 
 The filter builder is a separate, narrow typed compiler: column names and types come from the same approved catalog; values are bound parameters, never string-interpolated. A maximum of 20 conditions is combined with a typed all/any (AND/OR) choice; NULL checks consume no bind slot. Filtering and sorting run in PostgreSQL before LIMIT/OFFSET, with primary-key tie breakers and NULLS LAST. Text containment escapes `%`, `_` and backslash. Its internal built-in casts are not exposed as a generic SQL escape hatch.
 
+## PostgreSQL server browsing
+
+The database field may be empty. Startup discovers a maintenance database (`postgres`, username, `template1`) with bounded fallback only on SQLSTATE 3D000/42501; TLS, network and authentication failures do not retry against other databases. `pg_database` discovery excludes templates, disabled/invalid databases and missing CONNECT grants, and fails explicitly above 1,000 results. PostgreSQL still requires one database per physical connection.
+
+Requests carry optional database identity, including browse/query/save/count and schema/index/overview metadata. Each server profile owns an LRU of at most four idle transports keyed by the exact database name; explicit names never fall back. Successful neutral reads recycle to their own database; saves/counts remain dedicated. A workspace still permits one operation at a time across its databases. TLS hostname and VPN endpoint remain those of the original server. Disconnect/route replacement drops all owned transports. Reader preflight runs on the selected database, without relaxing privileges on maintenance databases.
+
+Frontend table and schema keys include database identity. Older bookmarks without it use their configured database; new layouts save database/schema/table identifiers only. Sidebar catalogs load on expansion and never grant query authorization. Refresh retains drafts and separates missing metadata from persisted tab identities. Database-name maps use null-prototype records and immutable assignment so names such as `__proto__` are safe and updates remain reactive.
+
+Product requirements retained: the installed app must provide per-connection VPN without Docker or a separate VPN program, and navigation should load on demand and reuse bounded connections. Local benchmark results do not establish a production latency guarantee. Unsigned Preview/manual-update limits remain until distribution certificates are available.
+
 ## Manual table editing
 
 `manualEdits` is an explicit connection choice (UI defaults on; missing API field defaults off). Human sessions accept normal database accounts without the strict-reader role audit. SELECT parsing, approved-table scope, read-only transactions, TLS and resource limits still apply to reads. Database grants remain authoritative. A reader account in manual mode has no editable cells.

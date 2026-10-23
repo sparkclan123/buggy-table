@@ -946,6 +946,7 @@ mod tests {
         profile.username = user.clone();
         profile.password = "disposable-only".to_string().into();
         let request = QueryRequest {
+            database: None,
             connection_id: String::new(),
             request_id: String::new(),
             schema: None,
@@ -1002,6 +1003,7 @@ mod tests {
         let counted = count(
             &profile,
             &BrowseRequest {
+                database: None,
                 connection_id: String::new(),
                 request_id: String::new(),
                 schema: Some("tablepor_test".into()),

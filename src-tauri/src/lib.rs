@@ -56,6 +56,7 @@ pub fn run() {
             connection_commands::update_connection,
             connection_commands::remove_connection,
             connection_commands::list_schemas,
+            connection_commands::list_databases,
             connection_commands::schema_tables,
             commands::disconnect,
             commands::run_query,

@@ -43,7 +43,7 @@ test('connection dialog traps focus, hides passwords and closes with Escape', as
   await page.getByRole('button', { name: 'Connect database', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('type', 'password');
-  await page.getByLabel('Database', { exact: true }).fill('test');
+  await page.getByLabel('Default database (optional)', { exact: true }).fill('test');
   await page.getByLabel('Username', { exact: true }).fill('reader');
   await page.getByLabel('Password', { exact: true }).fill('CANARY_SECRET');
   await page.getByRole('button', { name: 'Connect securely' }).click();

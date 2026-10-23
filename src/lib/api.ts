@@ -68,23 +68,35 @@ export const api = {
   updateConnection: (id: string, layout: ProfileLayout, pinned: boolean, group: string) =>
     call<void>('update_connection', { id, layout, pinned, group }),
   removeConnection: (id: string) => call<void>('remove_connection', { id }),
-  schemas: (connectionId: string) => call<string[]>('list_schemas', { connectionId }),
-  schemaTables: (connectionId: string, schema: string) =>
-    call<TableInfo[]>('schema_tables', { connectionId, schema }),
+  databases: (connectionId: string) => call<string[]>('list_databases', { connectionId }),
+  schemas: (connectionId: string, database?: string) =>
+    call<string[]>('list_schemas', { connectionId, database }),
+  schemaTables: (connectionId: string, schema: string, database?: string) =>
+    call<TableInfo[]>('schema_tables', { connectionId, schema, database }),
   redis: (connectionId: string, requestId: string, args: string[]) =>
     call<RedisResult>('redis_command', { request: { connectionId, requestId, args } }),
   save: (request: SaveRequest) => call<SaveResult>('save_table_changes', { request }),
   connect: (request: ConnectRequest) => call<ConnectionInfo>('connect', { request }),
   disconnect: (connectionId: string) => call<void>('disconnect', { connectionId }),
-  query: (connectionId: string, requestId: string, sql: string, explain = false, schema?: string) =>
-    call<QueryResult>('run_query', { request: { connectionId, requestId, sql, explain, schema } }),
+  query: (
+    connectionId: string,
+    requestId: string,
+    sql: string,
+    explain = false,
+    schema?: string,
+    database?: string,
+  ) =>
+    call<QueryResult>('run_query', {
+      request: { connectionId, requestId, sql, explain, schema, database },
+    }),
   cancel: (connectionId: string, requestId: string) =>
     call<void>('cancel_query', { connectionId, requestId }),
   count: (request: BrowseRequest) => call<RowCount>('count_table_rows', { request }),
   browse: (request: BrowseRequest) => call<QueryResult>('browse_table', { request }),
-  indexes: (connectionId: string, table: string, schema?: string) =>
-    call<IndexInfo[]>('inspect_table', { connectionId, table, schema }),
-  overview: (connectionId: string) => call<Overview>('get_overview', { connectionId }),
+  indexes: (connectionId: string, table: string, schema?: string, database?: string) =>
+    call<IndexInfo[]>('inspect_table', { connectionId, table, schema, database }),
+  overview: (connectionId: string, database?: string) =>
+    call<Overview>('get_overview', { connectionId, database }),
 };
 
 export function errorMessage(error: unknown): string {

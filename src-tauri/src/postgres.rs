@@ -1,6 +1,6 @@
 //! PostgreSQL transport and fixed catalog queries. No UI code or generic shell access.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     error::Error as _,
     io::ErrorKind,
     net::IpAddr,
@@ -34,7 +34,8 @@ pub struct Profile {
     tls: TlsMode,
     root_ca: Vec<Certificate>,
     pub manual_edits: bool,
-    idle: Mutex<Option<Database>>,
+    idle: Mutex<VecDeque<Database>>,
+    discovered_database: OnceLock<String>,
     pub(crate) endpoint: Option<std::net::SocketAddr>,
 }
 
@@ -51,7 +52,6 @@ impl Profile {
         for field in [
             &request.name,
             &request.host,
-            &request.database,
             &request.username,
             &request.schema,
         ] {
@@ -61,6 +61,12 @@ impl Profile {
                     "Connection fields must contain 1–253 characters and no NUL bytes.",
                 ));
             }
+        }
+        if request.database.len() > 253 || request.database.contains('\0') {
+            return Err(AppError::new(
+                "INVALID_CONNECTION",
+                "Invalid database name.",
+            ));
         }
         if request.port == 0 || password.len() > 4096 {
             return Err(AppError::new(
@@ -96,7 +102,8 @@ impl Profile {
             tls: request.tls,
             root_ca,
             manual_edits: request.manual_edits,
-            idle: Mutex::new(None),
+            idle: Mutex::new(VecDeque::new()),
+            discovered_database: OnceLock::new(),
             endpoint: None,
         })
     }
@@ -120,17 +127,29 @@ impl Profile {
         }
     }
 
-    /// One transport per workspace. Approved reads use PostgreSQL's implicit
+    /// At most four idle transports per server workspace, keyed by database.
+    /// Approved reads use PostgreSQL's implicit
     /// read-only transactions, so successful reads leave no transaction open.
     pub async fn open(&self) -> AppResult<Database> {
-        let idle = self.idle.lock().ok().and_then(|mut idle| idle.take());
+        self.open_in(None).await
+    }
+
+    pub async fn open_in(&self, database: Option<&str>) -> AppResult<Database> {
+        let target = self.target_database(database)?;
+        let Some(target) = target else {
+            return self.discover().await;
+        };
+        let idle = self.idle.lock().ok().and_then(|mut idle| {
+            let index = idle.iter().position(|db| db.database == target)?;
+            idle.remove(index)
+        });
         if let Some(mut db) = idle
             && !db.client.is_closed()
         {
             db.reused = true;
             return Ok(db);
         }
-        self.connect_transport().await
+        self.connect_transport(&target).await
     }
 
     pub fn recycle(&self, db: Database) {
@@ -140,19 +159,64 @@ impl Profile {
             && !db.client.is_closed()
             && let Ok(mut idle) = self.idle.lock()
         {
-            *idle = Some(db);
+            idle.retain(|old| old.database != db.database && !old.client.is_closed());
+            idle.push_back(db);
+            while idle.len() > 4 {
+                idle.pop_front();
+            }
         }
     }
 
-    pub async fn open_dedicated(&self) -> AppResult<Database> {
-        let db = self.connect_transport().await?;
+    pub async fn open_dedicated_in(&self, database: Option<&str>) -> AppResult<Database> {
+        let db = match self.target_database(database)? {
+            Some(target) => self.connect_transport(&target).await?,
+            None => self.discover().await?,
+        };
         db.prevent_reuse();
         Ok(db)
     }
 
-    async fn connect_transport(&self) -> AppResult<Database> {
+    fn target_database(&self, database: Option<&str>) -> AppResult<Option<String>> {
+        if let Some(name) = database {
+            if name.is_empty() || name.len() > 253 || name.contains('\0') {
+                return Err(AppError::new(
+                    "INVALID_CONNECTION",
+                    "Invalid database name.",
+                ));
+            }
+            return Ok(Some(name.into()));
+        }
+        Ok(if self.database.is_empty() {
+            self.discovered_database.get().cloned()
+        } else {
+            Some(self.database.clone())
+        })
+    }
+
+    async fn discover(&self) -> AppResult<Database> {
+        // PostgreSQL requires a database in its startup packet. Try only conventional
+        // maintenance databases; never retry an authentication/TLS/network failure.
+        let mut candidates = vec!["postgres", self.username.as_str(), "template1"];
+        candidates.dedup();
+        for name in candidates {
+            match self.connect_transport(name).await {
+                Ok(db) => {
+                    let _ = self.discovered_database.set(name.into());
+                    return Ok(db);
+                }
+                Err(e) if matches!(e.code, "DATABASE_UNAVAILABLE") => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(AppError::new(
+            "DATABASE_REQUIRED",
+            "No accessible maintenance database was found. Enter a database name your account can connect to; you can browse other databases after connecting.",
+        ))
+    }
+
+    async fn connect_transport(&self, database: &str) -> AppResult<Database> {
         let mut config = Config::new();
-        config.host(&self.host).port(self.endpoint.map_or(self.port, |e| e.port())).dbname(&self.database).user(&self.username)
+        config.host(&self.host).port(self.endpoint.map_or(self.port, |e| e.port())).dbname(database).user(&self.username)
             .password(self.password.as_bytes()).application_name("table-por")
             .connect_timeout(Duration::from_secs(5))
             .options("-c default_transaction_read_only=on -c search_path=pg_catalog -c statement_timeout=10000 -c lock_timeout=1500 -c idle_in_transaction_session_timeout=10000 -c standard_conforming_strings=on");
@@ -195,6 +259,7 @@ impl Profile {
             }
         };
         let db = Database {
+            database: database.into(),
             client,
             task,
             tls: self.tls,
@@ -209,6 +274,7 @@ impl Profile {
 }
 
 pub struct Database {
+    database: String,
     pub(crate) client: Client,
     task: JoinHandle<()>,
     tls: TlsMode,
@@ -283,6 +349,12 @@ fn deadline() -> AppError {
 
 fn connection_error(error: tokio_postgres::Error, mode: TlsMode) -> AppError {
     let code = error.as_db_error().map(|e| e.code().code());
+    if matches!(code, Some("3D000" | "42501")) {
+        return AppError::new(
+            "DATABASE_UNAVAILABLE",
+            "The database does not exist or this account cannot connect to it. Choose an accessible database.",
+        );
+    }
     // Use driver categories and typed causes, never expose raw errors or server details.
     if error.to_string() == "error performing TLS handshake" {
         let unsupported = error
@@ -470,6 +542,17 @@ impl Database {
         validate_server_version(&version)?;
         let _ = self.version.set(version.clone());
         Ok(version)
+    }
+
+    pub async fn databases(&self) -> AppResult<Vec<String>> {
+        let rows = self.client.query_typed("SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datconnlimit <> -2 AND has_database_privilege(oid, 'CONNECT') ORDER BY datname LIMIT 1001", &[]).await.map_err(query_error)?;
+        if rows.len() > 1000 {
+            return Err(AppError::new(
+                "CATALOG_LIMIT",
+                "This server exposes more than 1000 databases. The list was not partially loaded.",
+            ));
+        }
+        Ok(rows.iter().map(|row| row.get(0)).collect())
     }
 
     pub async fn schemas(&self) -> AppResult<Vec<String>> {

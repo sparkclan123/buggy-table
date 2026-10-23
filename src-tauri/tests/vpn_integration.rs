@@ -56,6 +56,7 @@ fn request(host: &str) -> ConnectRequest {
 }
 fn query(id: &str) -> QueryRequest {
     QueryRequest {
+        database: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
         sql: "SELECT id, label FROM public.items ORDER BY id".into(),

@@ -215,8 +215,19 @@ pub async fn remove_connection(app: AppHandle, id: String) -> AppResult<()> {
 pub async fn list_schemas(
     state: State<'_, Workbench>,
     connection_id: String,
+    database: Option<String>,
 ) -> AppResult<Vec<String>> {
-    state.schemas(&connection_id).await
+    state
+        .schemas_in_database(&connection_id, database.as_deref())
+        .await
+}
+
+#[tauri::command]
+pub async fn list_databases(
+    state: State<'_, Workbench>,
+    connection_id: String,
+) -> AppResult<Vec<String>> {
+    state.databases(&connection_id).await
 }
 
 #[tauri::command]
@@ -224,6 +235,9 @@ pub async fn schema_tables(
     state: State<'_, Workbench>,
     connection_id: String,
     schema: String,
+    database: Option<String>,
 ) -> AppResult<Vec<TableInfo>> {
-    state.schema_tables(&connection_id, &schema).await
+    state
+        .tables_in_database(&connection_id, &schema, database.as_deref())
+        .await
 }

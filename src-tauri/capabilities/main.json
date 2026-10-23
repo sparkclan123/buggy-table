@@ -29,6 +29,7 @@
     "allow-update-connection",
     "allow-remove-connection",
     "allow-list-schemas",
+    "allow-list-databases",
     "allow-schema-tables",
     "allow-vpn-profiles",
     "allow-discard-vpn-draft",

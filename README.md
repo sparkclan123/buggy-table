@@ -39,6 +39,7 @@ A personal, local-first database workspace built with **Rust, Tauri 2, Svelte an
 Primary key ของแถวเดิม, identity/generated columns และตารางไม่มี Primary key ยังแก้ไม่ได้ ส่วนแถวใหม่กรอก Primary key ที่ไม่ได้สร้างอัตโนมัติได้ Save จำกัด 100 แถว/500 เซลล์/4 MiB ต่อครั้ง หากเกิด conflict จะไม่บันทึกทั้งชุด หากผล COMMIT ไม่แน่นอน จะบล็อกการบันทึกซ้ำจน discard draft และ reload ทั้งนี้ manual INSERT/UPDATE/DELETE ทำงานตาม constraints/triggers ของฐานข้อมูลตามปกติ
 
 - จำ connection ในเครื่อง พร้อมกลุ่ม/ปักหมุด/ค้นหา (`⌘/Ctrl K`) และ Reconnect หลังเปิดแอปใหม่ เก็บรหัสผ่านใน OS password store ได้เมื่อเลือกเอง
+- PostgreSQL เว้น Default database ได้: กด + เพื่อขยายฐานข้อมูล/schema แล้วเลือกตาราง โหลดตามต้องการและใช้ connection ซ้ำสูงสุด 4 ก้อนต่อ workspace แท็บและ Save แยกฐานข้อมูลชัดเจน
 - สลับ PostgreSQL schema และหลาย connection โดยรักษาแท็บ/เซลล์ที่แก้ค้าง แสดงรายการล่าสุด 5 รายการ และค้นหาทั้งหมดได้
 - PostgreSQL แสดงรายชื่อ tables/views ใน schema พร้อมเหตุผลสำหรับรายการที่อ่านไม่ได้; รองรับ JSON/JSONB, enum และ array ของชนิดที่รองรับ รวมถึงอ่าน materialized views และมีปุ่ม Refresh schema
 - อ่าน catalog เป็นชุดแทนการส่งคำสั่งแยกทุกตาราง เพื่อลดเวลารอเซิร์ฟเวอร์ภายนอก; เวลา PostgreSQL แสดงผลรวมพร้อมรายละเอียด connection/checks/query เมื่อชี้ที่ตัวเลข

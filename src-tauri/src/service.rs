@@ -170,7 +170,11 @@ impl Workbench {
             match &profile.adapter {
                 Adapter::Postgres(p) => {
                     let db = p.open().await?;
-                    let (version, tables) = tokio::try_join!(db.preflight(), db.tables(&p.schema))?;
+                    let (version, tables) = if profile.request.database.is_empty() {
+                        (db.preflight().await?, Vec::new())
+                    } else {
+                        tokio::try_join!(db.preflight(), db.tables(&p.schema))?
+                    };
                     p.recycle(db);
                     Ok(p.info(id.clone(), version, tables))
                 }
@@ -369,7 +373,9 @@ impl Workbench {
                 }
                 let profile = profile.postgres()?;
                 // SET LOCAL count timeout is isolated from reusable read sessions.
-                let db = profile.open_dedicated().await?;
+                let db = profile
+                    .open_dedicated_in(request.database.as_deref())
+                    .await?;
                 let (_, table) = tokio::try_join!(
                     db.preflight(),
                     db.approved_table(
@@ -398,7 +404,9 @@ impl Workbench {
         }
         let work = async {
             // Writes can execute triggers that change session state. Never pool them.
-            let db = profile.open_dedicated().await?;
+            let db = profile
+                .open_dedicated_in(request.database.as_deref())
+                .await?;
             db.save(
                 request.schema.as_deref().unwrap_or(&profile.schema),
                 &request,
@@ -435,9 +443,13 @@ impl Workbench {
             .await;
         }
         let profile = profile.postgres()?;
+        let database = match &operation {
+            Operation::Sql(r) => r.database.as_deref(),
+            Operation::Browse(r) => r.database.as_deref(),
+        };
         let connecting = Instant::now();
         let mut db = tokio::select! {
-            result = profile.open() => result?,
+            result = profile.open_in(database) => result?,
             _ = async { let _ = cancelled.wait_for(|value| *value).await; } => return Err(AppError::new("CANCELLED", "Connection attempt cancelled.")),
         };
         let mut connection_ms = connecting.elapsed().as_millis() as u64;
@@ -459,8 +471,12 @@ impl Workbench {
         {
             drop(db);
             let reconnecting = Instant::now();
-            db = bounded_metadata_until(profile.open(), cancelled.clone(), operation_deadline)
-                .await?;
+            db = bounded_metadata_until(
+                profile.open_in(database),
+                cancelled.clone(),
+                operation_deadline,
+            )
+            .await?;
             connection_ms += reconnecting.elapsed().as_millis() as u64;
             let validating = Instant::now();
             prepared = bounded_metadata_until(
@@ -532,6 +548,17 @@ impl Workbench {
         table_name: &str,
         schema: Option<&str>,
     ) -> AppResult<Vec<IndexInfo>> {
+        self.indexes_in_database(connection_id, table_name, schema, None)
+            .await
+    }
+
+    pub async fn indexes_in_database(
+        &self,
+        connection_id: &str,
+        table_name: &str,
+        schema: Option<&str>,
+        database: Option<&str>,
+    ) -> AppResult<Vec<IndexInfo>> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
@@ -541,7 +568,7 @@ impl Workbench {
         let profile = profile.postgres()?;
         bounded_metadata(
             async {
-                let db = profile.open().await?;
+                let db = profile.open_in(database).await?;
                 let schema = schema.unwrap_or(&profile.schema);
                 tokio::try_join!(db.preflight(), db.approved_table(schema, table_name))?;
                 let result = db.indexes(schema, table_name).await?;
@@ -553,7 +580,32 @@ impl Workbench {
         .await
     }
 
+    pub async fn databases(&self, connection_id: &str) -> AppResult<Vec<String>> {
+        let (session, _guard, cancelled) = self
+            .start_operation(connection_id, &Uuid::new_v4().to_string())
+            .await?;
+        let profile = session.postgres()?;
+        bounded_metadata(
+            async {
+                let db = profile.open().await?;
+                let (_, names) = tokio::try_join!(db.preflight(), db.databases())?;
+                profile.recycle(db);
+                Ok(names)
+            },
+            cancelled,
+        )
+        .await
+    }
+
     pub async fn schemas(&self, connection_id: &str) -> AppResult<Vec<String>> {
+        self.schemas_in_database(connection_id, None).await
+    }
+
+    pub async fn schemas_in_database(
+        &self,
+        connection_id: &str,
+        database: Option<&str>,
+    ) -> AppResult<Vec<String>> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
@@ -563,7 +615,7 @@ impl Workbench {
         let profile = profile.postgres()?;
         bounded_metadata(
             async {
-                let db = profile.open().await?;
+                let db = profile.open_in(database).await?;
                 let (_, result) = tokio::try_join!(db.preflight(), db.schemas())?;
                 profile.recycle(db);
                 Ok(result)
@@ -578,6 +630,15 @@ impl Workbench {
         connection_id: &str,
         schema: &str,
     ) -> AppResult<Vec<TableInfo>> {
+        self.tables_in_database(connection_id, schema, None).await
+    }
+
+    pub async fn tables_in_database(
+        &self,
+        connection_id: &str,
+        schema: &str,
+        database: Option<&str>,
+    ) -> AppResult<Vec<TableInfo>> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
@@ -587,7 +648,7 @@ impl Workbench {
         let profile = profile.postgres()?;
         bounded_metadata(
             async {
-                let db = profile.open().await?;
+                let db = profile.open_in(database).await?;
                 let (_, result) = tokio::try_join!(db.preflight(), db.tables(schema))?;
                 profile.recycle(db);
                 Ok(result)
@@ -610,6 +671,14 @@ impl Workbench {
     }
 
     pub async fn overview(&self, connection_id: &str) -> AppResult<Overview> {
+        self.overview_in_database(connection_id, None).await
+    }
+
+    pub async fn overview_in_database(
+        &self,
+        connection_id: &str,
+        database: Option<&str>,
+    ) -> AppResult<Overview> {
         let (profile, _guard, cancelled) = self
             .start_operation(connection_id, &Uuid::new_v4().to_string())
             .await?;
@@ -619,7 +688,7 @@ impl Workbench {
         let profile = profile.postgres()?;
         bounded_metadata(
             async {
-                let db = profile.open().await?;
+                let db = profile.open_in(database).await?;
                 let (_, result) = tokio::try_join!(db.preflight(), db.overview())?;
                 profile.recycle(db);
                 Ok(result)

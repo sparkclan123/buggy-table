@@ -21,6 +21,7 @@ fn main() {
             "update_connection",
             "remove_connection",
             "list_schemas",
+            "list_databases",
             "schema_tables",
             "disconnect",
             "run_query",

@@ -1,5 +1,12 @@
 # Validation history
 
+## PostgreSQL server browsing — 0.1.17 Preview, 2026-10-23
+
+- 144 Chromium/WebKit UI cases passed locally, including blank PostgreSQL database input, lazy database/schema expansion, empty databases, catalog retry, names such as `__proto__`, refresh/removal, independent drafts and database-scoped tab restore. Light/dark screenshots were visually inspected. Browser database cases use IPC doubles.
+- All 33 PostgreSQL integration cases passed against a disposable PostgreSQL 17 server. Added coverage verifies CONNECT-filtered discovery, conventional maintenance fallback, explicit-name failures without fallback, quoted database names, same-named tables in separate databases/schemas, correct reads/counts/indexes/overview/saves, strict-reader checks in the selected database, reuse when alternating databases, a four-idle-connection bound and disconnect cleanup. The actual TLS authentication/transport test also passed.
+- 12 frontend unit cases, Rust unit/contract checks, Svelte/TypeScript, formatting, Clippy with warnings denied and release/version checks passed locally. The native VPN engine rebuild/self-test passed. The installers' exact CI source, cross-platform checks and package verification are recorded in the release BUILD_INFO.txt.
+- Only synthetic disposable local data and credentials were used. The supplied production database and user VPN profiles were not accessed. Connection reuse is verified, but no production latency or fastest-client claim is made.
+
 ## Draft history, copied rows, keyboard shortcuts and MySQL TLS — 0.1.10 Preview, 2026-10-20
 
 - 120 distinct Chromium/WebKit cases passed locally: 116 in the full run, followed by 32 relevant cases after the final changes, including four added cases. Coverage includes per-cell undo/redo, active-editor undo, staged deletion, copied rows/default keys, multi-row copies, table isolation, required manual keys, deleting unsaved copies without DELETE permission, Save/Discard behavior, expanded editors, thin scrollbars, SQL run shortcuts and mouse-wheel tab scrolling. Browser database cases use IPC doubles; sample saves remain local.

@@ -32,6 +32,7 @@ fn request(engine: Engine) -> ConnectRequest {
 }
 fn query(id: &str, sql: &str) -> QueryRequest {
     QueryRequest {
+        database: None,
         schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
@@ -41,6 +42,7 @@ fn query(id: &str, sql: &str) -> QueryRequest {
 }
 fn browse(id: &str) -> BrowseRequest {
     BrowseRequest {
+        database: None,
         schema: None,
         connection_id: id.into(),
         request_id: Uuid::new_v4().to_string(),
@@ -306,6 +308,7 @@ async fn mysql_rejects_mutation_and_indirection_with_reader_and_admin_accounts()
         }
         assert_eq!(
             app.save(SaveRequest {
+                database: None,
                 schema: None,
                 connection_id: info.id.clone(),
                 request_id: Uuid::new_v4().to_string(),

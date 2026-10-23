@@ -7,6 +7,7 @@
     tabs,
     activeId,
     busy,
+    showDatabase = false,
     onactivate,
     onclose,
     onreorder,
@@ -14,6 +15,7 @@
     tabs: TableWorkspace[];
     activeId: string;
     busy: boolean;
+    showDatabase?: boolean;
     onactivate: (id: string) => void;
     onclose: (id: string) => void;
     onreorder: (ids: string[]) => void;
@@ -218,7 +220,7 @@
         role="tab"
         aria-selected={item.id === activeId}
         disabled={busy}
-        title="Click to open · drag to reorder · Alt+←/→ move tab"
+        title={`${item.database ? item.database + ' / ' : ''}${item.schema} / ${item.selectedName} · Drag to reorder · Alt+←/→ move tab`}
         onpointerdown={(event) => start(event, item.id)}
         onpointermove={move}
         onpointerup={() => finish(true)}
@@ -230,6 +232,7 @@
         }}
       >
         <Table2 size={14} />{item.selectedName}
+        {#if showDatabase && item.database}<small class="muted"> · {item.database}</small>{/if}
         {#if item.schema && item.schema !== 'public'}<small class="muted">
             · {item.schema}</small
           >{/if}
@@ -259,6 +262,9 @@
     style:height={`${drag.height}px`}
   >
     <Table2 size={14} />{draggedTab.selectedName}
+    {#if showDatabase && draggedTab.database}<small class="muted">
+        · {draggedTab.database}</small
+      >{/if}
     {#if draggedTab.schema !== 'public'}<small class="muted"> · {draggedTab.schema}</small>{/if}
     {#if pendingRows(draggedTab) || draggedTab.uncertain}<span class="dirty-dot"></span>{/if}
   </div>

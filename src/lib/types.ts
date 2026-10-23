@@ -24,6 +24,7 @@ export interface ColumnInfo {
   hasDefault?: boolean;
 }
 export interface TableInfo {
+  database?: string;
   schema: string;
   name: string;
   columns: ColumnInfo[];
@@ -72,6 +73,7 @@ export interface Filter {
   value: string;
 }
 export interface BrowseRequest {
+  database?: string;
   schema?: string;
   connectionId: string;
   requestId: string;
@@ -121,6 +123,7 @@ export interface RowChange {
   changes: Record<string, string | null>;
 }
 export interface SaveRequest {
+  database?: string;
   schema?: string;
   connectionId: string;
   requestId: string;
@@ -139,8 +142,9 @@ export interface RedisResult {
 }
 
 export interface ProfileLayout {
+  selectedDatabase?: string;
   selectedSchema: string;
-  tabs: { schema: string; table: string }[];
+  tabs: { database?: string; schema: string; table: string }[];
   activeTab: string;
 }
 export interface SavedConnection extends Omit<ConnectRequest, 'password'> {

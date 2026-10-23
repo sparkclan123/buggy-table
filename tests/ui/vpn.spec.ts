@@ -309,7 +309,7 @@ test('new database sends its chosen VPN selection with the connection request', 
   await dialog.getByRole('switch', { name: 'Use VPN for this database' }).click();
   await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
   await page.getByLabel('Host', { exact: true }).fill('vpn-db.test');
-  await page.getByLabel('Database', { exact: true }).fill('fixture');
+  await page.getByLabel('Default database (optional)', { exact: true }).fill('fixture');
   await page.getByLabel('Username', { exact: true }).fill('reader');
   await page.getByRole('button', { name: 'Connect securely' }).click();
   await expect(page.getByRole('alert')).toContainText('Fixture stop');

@@ -195,15 +195,11 @@
     </div>
     <div class="form-row">
       <label
-        >{engine === 'redis'
-          ? 'Database number'
-          : engine === 'mysql'
-            ? 'Default database (optional)'
-            : 'Database'}<input
+        >{engine === 'redis' ? 'Database number' : 'Default database (optional)'}<input
           bind:value={database}
-          required={engine !== 'mysql'}
+          required={engine === 'redis'}
           maxlength="253"
-          placeholder={engine === 'mysql' ? 'Choose after connecting' : 'my_database'}
+          placeholder={engine !== 'redis' ? 'Choose after connecting' : '0'}
           spellcheck="false"
         /></label
       >{#if engine === 'postgres'}<label

@@ -40,6 +40,7 @@
   import { guardWindowClose, listenForTabClose } from './lib/window-lifecycle';
   import {
     tableKey,
+    schemaKey,
     createWorkspace,
     changeCell,
     changedRows,
@@ -58,6 +59,7 @@
   import ConnectionDialog from './components/ConnectionDialog.svelte';
   import ConnectionManager from './components/ConnectionManager.svelte';
   import MySqlDatabases from './components/MySqlDatabases.svelte';
+  import PostgresDatabases from './components/PostgresDatabases.svelte';
   import VpnControls from './components/VpnControls.svelte';
   import VpnDialog from './components/VpnDialog.svelte';
   import type { VpnSelection, VpnStatus } from './lib/types';
@@ -131,12 +133,19 @@
         : 'PostgreSQL',
   );
   const isSample = $derived(connection.id === 'sample');
+  const postgresTree = $derived(!isSample && connection.engine === 'postgres');
+  const currentDatabase = $derived(
+    postgresTree ? workspace.database || session.navDatabase || undefined : undefined,
+  );
   const untestedPostgres = $derived(
     !isSample && connection.engine === 'postgres' && Number(connection.serverVersion) >= 190000,
   );
   const selected = $derived(
     connection.tables.find(
-      (t) => t.name === workspace.selectedName && t.schema === workspace.schema,
+      (t) =>
+        t.name === workspace.selectedName &&
+        t.schema === workspace.schema &&
+        t.database === workspace.database,
     ),
   );
   const visibleTables = $derived(
@@ -146,7 +155,9 @@
   );
   const editorSchema = $derived(
     Object.fromEntries(
-      connection.tables.map((t) => [`${t.schema}.${t.name}`, t.columns.map((c) => c.name)]),
+      connection.tables
+        .filter((t) => !postgresTree || t.database === currentDatabase)
+        .map((t) => [`${t.schema}.${t.name}`, t.columns.map((c) => c.name)]),
     ),
   );
 
@@ -170,6 +181,7 @@
     error = '';
     workspace.plan = null;
     const countKey = JSON.stringify([
+      table.database,
       table.schema,
       table.name,
       filters,
@@ -203,6 +215,7 @@
       const data = await api.browse({
         connectionId: connection.id,
         schema: table.schema,
+        database: table.database,
         requestId,
         table: table.name,
         filters,
@@ -229,9 +242,13 @@
   async function selectTable(table: TableInfo) {
     if (busy) return;
     session.navSchema = table.schema;
+    if (table.database) {
+      session.navDatabase = table.database;
+      session.schemas = session.databaseSchemas[table.database] ?? [table.schema];
+    }
     session.page = 'explorer';
     error = '';
-    const id = tableKey(table.schema, table.name);
+    const id = tableKey(table.schema, table.name, table.database);
     if (openTables.some((t) => t.id === id)) {
       await activateTab(id);
       return;
@@ -315,6 +332,7 @@
         await api.save({
           connectionId: connection.id,
           schema: selected.schema,
+          database: selected.database,
           requestId: crypto.randomUUID(),
           table: selected.name,
           rows,
@@ -496,17 +514,113 @@
     if (entry.online && workspace.tab === 'data' && !workspace.result) void loadData();
   }
 
-  async function ensureSchema(schema: string, refresh = false) {
+  async function ensureSchema(
+    schema: string,
+    refresh = false,
+    database = session.navDatabase || undefined,
+  ) {
+    const scope = postgresTree ? database : undefined;
+    const key = schemaKey(schema, scope);
     if (
       isSample ||
       connection.engine === 'redis' ||
       !schema ||
-      (!refresh && session.loadedSchemas.includes(schema))
+      (postgresTree && !scope) ||
+      (!refresh && session.loadedSchemas.includes(key))
     )
       return;
-    const tables = await api.schemaTables(connection.id, schema);
-    session.info.tables = [...connection.tables.filter((t) => t.schema !== schema), ...tables];
-    if (!session.loadedSchemas.includes(schema)) session.loadedSchemas.push(schema);
+    const tables = await api.schemaTables(connection.id, schema, scope);
+    session.info.tables = [
+      ...connection.tables.filter((t) => t.schema !== schema || t.database !== scope),
+      ...tables.map((t) => ({ ...t, database: scope })),
+    ];
+    if (!session.loadedSchemas.includes(key)) session.loadedSchemas.push(key);
+  }
+
+  async function ensureDatabase(database: string, refresh = false) {
+    if (!refresh && Object.hasOwn(session.databaseSchemas, database)) return;
+    const schemas = await api.schemas(connection.id, database);
+    session.databaseSchemas = Object.assign(Object.create(null), session.databaseSchemas, {
+      [database]: schemas,
+    });
+    // Drop stale metadata, while retaining any open tab and its unsaved draft.
+    session.info.tables = connection.tables.filter(
+      (t) => t.database !== database || schemas.includes(t.schema),
+    );
+    for (const collection of ['loadedSchemas', 'expandedSchemas'] as const)
+      session[collection] = session[collection].filter((key) => {
+        try {
+          const [db, schema] = JSON.parse(key);
+          return db !== database || schemas.includes(schema);
+        } catch {
+          return true;
+        }
+      });
+  }
+
+  function revealPostgres(database: string, schema: string) {
+    session.navDatabase = database;
+    session.navSchema = schema;
+    session.schemas = session.databaseSchemas[database] ?? [];
+    if (!session.expandedDatabases.includes(database)) session.expandedDatabases.push(database);
+    const key = schemaKey(schema, database);
+    if (schema && !session.expandedSchemas.includes(key)) session.expandedSchemas.push(key);
+    if (!workspace.selectedName) {
+      workspace.database = database;
+      workspace.schema = schema;
+    }
+  }
+
+  async function togglePostgresDatabase(database: string, refresh = false) {
+    if (busy || !session.online) return;
+    if (!refresh && session.expandedDatabases.includes(database)) {
+      session.expandedDatabases = session.expandedDatabases.filter((d) => d !== database);
+      return;
+    }
+    busy = true;
+    error = '';
+    try {
+      await ensureDatabase(database, refresh);
+      const schemas = session.databaseSchemas[database];
+      const preferred = session.navDatabase === database ? session.navSchema : connection.schema;
+      const schema = schemas.includes(preferred)
+        ? preferred
+        : schemas.includes('public')
+          ? 'public'
+          : (schemas[0] ?? '');
+      if (schema) await ensureSchema(schema, refresh, database);
+      if (refresh)
+        for (const name of schemas) {
+          if (name !== schema && session.expandedSchemas.includes(schemaKey(name, database)))
+            await ensureSchema(name, true, database);
+        }
+      revealPostgres(database, schema);
+      void persistLayout(session);
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function togglePostgresSchema(database: string, schema: string, refresh = false) {
+    if (busy || !session.online) return;
+    const key = schemaKey(schema, database);
+    if (!refresh && session.expandedSchemas.includes(key)) {
+      session.expandedSchemas = session.expandedSchemas.filter((s) => s !== key);
+      return;
+    }
+    busy = true;
+    error = '';
+    try {
+      await ensureSchema(schema, refresh, database);
+      revealPostgres(database, schema);
+      void persistLayout(session);
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      busy = false;
+    }
   }
 
   async function activateTab(id: string) {
@@ -516,7 +630,15 @@
     error = '';
     try {
       busy = true;
-      await ensureSchema(workspace.schema || session.navSchema);
+      if (postgresTree && workspace.database) {
+        await ensureDatabase(workspace.database);
+        revealPostgres(workspace.database, workspace.schema);
+      }
+      await ensureSchema(
+        workspace.schema || session.navSchema,
+        false,
+        workspace.database || session.navDatabase || undefined,
+      );
       if (workspace.schema) session.navSchema = workspace.schema;
       if (
         connection.engine === 'mysql' &&
@@ -545,6 +667,7 @@
     try {
       await ensureSchema(schema, true);
       session.navSchema = schema;
+      if (postgresTree && session.navDatabase) revealPostgres(session.navDatabase, schema);
       if (!workspace.selectedName) workspace.schema = schema;
       session.search = '';
       void persistLayout(session);
@@ -581,6 +704,38 @@
     busy = true;
     error = '';
     try {
+      if (postgresTree) {
+        session.databases = await api.databases(connection.id);
+        session.expandedDatabases = session.expandedDatabases.filter((d) =>
+          session.databases.includes(d),
+        );
+        session.databaseSchemas = Object.assign(
+          Object.create(null),
+          Object.fromEntries(
+            Object.entries(session.databaseSchemas).filter(([name]) =>
+              session.databases.includes(name),
+            ),
+          ),
+        );
+        session.info.tables = connection.tables.filter(
+          (t) => t.database && session.databases.includes(t.database),
+        );
+        session.loadedSchemas = session.loadedSchemas.filter((key) => {
+          try {
+            return session.databases.includes(JSON.parse(key)[0]);
+          } catch {
+            return false;
+          }
+        });
+        session.expandedSchemas = session.expandedSchemas.filter((key) => {
+          try {
+            return session.databases.includes(JSON.parse(key)[0]);
+          } catch {
+            return false;
+          }
+        });
+        return;
+      }
       session.schemas = await api.schemas(connection.id);
       session.expandedSchemas = session.expandedSchemas.filter((s) => session.schemas.includes(s));
       session.loadedSchemas = session.loadedSchemas.filter((s) => session.schemas.includes(s));
@@ -618,7 +773,16 @@
     if (next.engine !== 'redis') {
       busy = true;
       try {
-        session.schemas = (await api.schemas(next.id)) ?? (next.schema ? [next.schema] : []);
+        if (next.engine === 'postgres') {
+          session.databases =
+            (await api.databases(next.id)) ?? (next.database ? [next.database] : []);
+          if (next.database) {
+            session.databaseSchemas = Object.assign(Object.create(null), session.databaseSchemas, {
+              [next.database]: (await api.schemas(next.id, next.database)) ?? [next.schema],
+            });
+            session.schemas = session.databaseSchemas[next.database];
+          }
+        } else session.schemas = (await api.schemas(next.id)) ?? (next.schema ? [next.schema] : []);
       } catch (e) {
         schemaWarning = errorMessage(e);
       } finally {
@@ -627,7 +791,9 @@
     }
     if (entry.tabs[0].id === 'empty') {
       entry.tabs[0].schema = entry.navSchema;
-      if (next.tables[0]) await selectTable(next.tables[0]);
+      entry.tabs[0].database =
+        next.engine === 'postgres' ? entry.navDatabase || undefined : undefined;
+      if (entry.info.tables[0]) await selectTable(entry.info.tables[0]);
     } else await activateTab(entry.activeId);
     if (entry.saved) void persistLayout(entry);
     if (result.warning || schemaWarning)
@@ -672,7 +838,13 @@
       session.tabs = session.tabs.map((t) =>
         createWorkspace(
           t.selectedName
-            ? { schema: t.schema, name: t.selectedName, columns: [], estimatedRows: null }
+            ? {
+                database: t.database,
+                schema: t.schema,
+                name: t.selectedName,
+                columns: [],
+                estimatedRows: null,
+              }
             : undefined,
           connection.engine,
         ),
@@ -813,7 +985,12 @@
       }
       busy = true;
       try {
-        workspace.indexes = await api.indexes(connection.id, selected.name, selected.schema);
+        workspace.indexes = await api.indexes(
+          connection.id,
+          selected.name,
+          selected.schema,
+          selected.database,
+        );
       } catch (e) {
         error = errorMessage(e);
       } finally {
@@ -827,6 +1004,10 @@
     if (isSample) {
       error =
         'Connect your PostgreSQL database to execute SQL. The sample workspace is a local UI preview.';
+      return;
+    }
+    if (postgresTree && !currentDatabase) {
+      error = 'Expand a database to choose where to run this query.';
       return;
     }
     const current = ++epoch;
@@ -843,6 +1024,7 @@
         workspace.sql,
         explain,
         workspace.schema || session.navSchema,
+        currentDatabase,
       );
       if (current === epoch) {
         if (explain) {
@@ -879,11 +1061,12 @@
     busy = true;
     error = '';
     try {
-      session.overview = await api.overview(connection.id);
+      session.overview = await api.overview(connection.id, currentDatabase);
       const previous = session.snapshots.at(-1);
       if (
         previous &&
-        (previous.statsReset !== session.overview.statsReset ||
+        (previous.database !== session.overview.database ||
+          previous.statsReset !== session.overview.statsReset ||
           numeric(session.overview.transactionsCommitted)! <
             numeric(previous.transactionsCommitted)!)
       )
@@ -1039,6 +1222,7 @@
       const count = await api.count({
         connectionId: connection.id,
         schema: selected.schema,
+        database: selected.database,
         requestId,
         table: selected.name,
         filters: workspace.appliedFilters,
@@ -1242,12 +1426,14 @@
       {:else}
         <div class="table-search">
           <Search size={13} /><input
-            aria-label={connection.engine === 'mysql'
+            aria-label={connection.engine === 'mysql' || postgresTree
               ? 'Search databases and loaded tables'
               : 'Search tables'}
             bind:value={session.search}
-            placeholder={connection.engine === 'mysql' ? 'Find database / table…' : 'Find a table…'}
-            title={connection.engine === 'mysql'
+            placeholder={connection.engine === 'mysql' || postgresTree
+              ? 'Find database / table…'
+              : 'Find a table…'}
+            title={connection.engine === 'mysql' || postgresTree
               ? 'Search databases and tables already loaded. Expand a database to load its tables.'
               : 'Search tables'}
             spellcheck="false"
@@ -1271,6 +1457,24 @@
               onselect={selectTable}
             />
           {:else}<p class="sidebar-empty">Reconnect to load databases</p>{/if}
+        {:else if postgresTree}
+          {#if session.online}<PostgresDatabases
+              names={session.databases}
+              schemas={session.databaseSchemas}
+              tables={connection.tables}
+              expanded={session.expandedDatabases}
+              expandedSchemas={session.expandedSchemas}
+              selectedDatabase={workspace.database || session.navDatabase}
+              selectedSchema={workspace.schema || session.navSchema}
+              selectedTable={workspace.selectedName}
+              {search}
+              disabled={busy}
+              ontoggle={togglePostgresDatabase}
+              onschema={togglePostgresSchema}
+              onrefresh={(name) => togglePostgresDatabase(name, true)}
+              onreload={refreshDatabases}
+              onselect={selectTable}
+            />{:else}<p class="sidebar-empty">Reconnect to load databases</p>{/if}
         {:else}<div class="table-list">
             {#each visibleTables as table}<button
                 class:selected={page === 'explorer' &&
@@ -1307,7 +1511,11 @@
           <select
             aria-label="Select PostgreSQL schema"
             value={session.navSchema}
-            disabled={busy || !session.online || isSample || connection.engine !== 'postgres'}
+            disabled={busy ||
+              !session.online ||
+              isSample ||
+              connection.engine !== 'postgres' ||
+              !session.navDatabase}
             onchange={async (event) => {
               const select = event.currentTarget;
               await changeSchema(select.value);
@@ -1399,6 +1607,9 @@
         {#key session.key}
           <TableTabs
             tabs={openTables}
+            showDatabase={postgresTree &&
+              (!connection.database ||
+                openTables.some((t) => t.database && t.database !== connection.database))}
             {activeId}
             {busy}
             onactivate={activateTab}
@@ -1422,7 +1633,7 @@
           <span class="muted small"
             >{connection.engine === 'mysql'
               ? workspace.schema || session.navSchema || 'Choose a database'
-              : `${connection.database} / ${workspace.schema || session.navSchema}`}{#if selected}
+              : `${currentDatabase || connection.database || 'Choose a database'} / ${workspace.schema || session.navSchema}`}{#if selected}
               · {selected.columns.length} columns{/if}</span
           >
           <span class="tab-spacer"></span>
@@ -1610,7 +1821,7 @@
                   connection.engine,
                   connection.host,
                   connection.port,
-                  connection.database,
+                  currentDatabase ?? connection.database,
                   connection.username,
                   workspace.schema,
                   workspace.selectedName,

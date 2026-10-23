@@ -133,6 +133,7 @@ async fn measure(
                 let started = Instant::now();
                 let result = if operation == "query" {
                     app.query(QueryRequest {
+                        database: None,
                         connection_id: info.id.clone(),
                         request_id: Uuid::new_v4().to_string(),
                         schema: Some(schema.into()),
@@ -144,6 +145,7 @@ async fn measure(
                     .await?
                 } else {
                     app.browse(BrowseRequest {
+                        database: None,
                         connection_id: info.id.clone(),
                         request_id: Uuid::new_v4().to_string(),
                         schema: Some(schema.into()),
