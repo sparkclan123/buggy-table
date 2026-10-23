@@ -3,6 +3,16 @@
 #include <stdlib.h>
 #include <stdio.h>
 #ifdef _MSC_VER
+#include <BaseTsd.h>
+#if !defined(_SSIZE_T_) && !defined(_SSIZE_T_DEFINED)
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_
+#define _SSIZE_T_DEFINED
+#endif
+#ifndef SSIZE_MAX
+#define SSIZE_MAX INTPTR_MAX
+#endif
+#define LWIP_NO_UNISTD_H 1
 #define PACK_STRUCT_BEGIN __pragma(pack(push, 1))
 #define PACK_STRUCT_END __pragma(pack(pop))
 #define PACK_STRUCT_STRUCT

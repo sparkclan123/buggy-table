@@ -14,11 +14,37 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / 'native' / 'vpn'
 CACHE = ROOT / 'artifacts' / 'native-vpn'
+MACOS_MINIMUM = '11.0'
+
+
+def build_crypto(deps, checksum):
+    system = platform.system()
+    architecture = platform.machine().lower()
+    target = ('darwin64-arm64-cc' if architecture == 'arm64' else 'darwin64-x86_64-cc') if system == 'Darwin' else (
+        'VC-WIN64A' if system == 'Windows' else 'linux-x86_64')
+    prefix = CACHE / 'openssl-install'
+    identity = f'{checksum}:{target}:macos{MACOS_MINIMUM}:static-v1'
+    marker = prefix / '.built-identity'
+    if marker.exists() and marker.read_text() == identity:
+        return prefix
+    build = CACHE / 'openssl-build'
+    if build.exists():
+        shutil.rmtree(build)
+    build.mkdir()
+    environment = dict(os.environ)
+    if system == 'Darwin':
+        environment['MACOSX_DEPLOYMENT_TARGET'] = MACOS_MINIMUM
+    subprocess.run(['perl', str(deps / 'openssl' / 'Configure'), target, 'no-shared', 'no-tests', 'no-module',
+                    '--prefix=' + prefix.as_posix(), '--libdir=lib'], cwd=build, env=environment, check=True)
+    make = ['nmake'] if system == 'Windows' else ['make', '-j3']
+    subprocess.run(make + ['build_libs'], cwd=build, env=environment, check=True)
+    subprocess.run(make + ['install_dev'], cwd=build, env=environment, check=True)
+    marker.write_text(identity)
+    return prefix
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--openssl', help='Static OpenSSL installation prefix')
     parser.add_argument('--sanitize', action='store_true')
     args = parser.parse_args()
     deps = CACHE / 'deps'
@@ -73,11 +99,16 @@ def main():
     build = CACHE / ('asan' if args.sanitize else 'build')
     command = ['cmake', '-S', str(SOURCE), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
                '-DVPN_DEPS=' + deps.as_posix(), '-DVPN_SANITIZE=' + ('ON' if args.sanitize else 'OFF')]
-    openssl = args.openssl or os.environ.get('OPENSSL_ROOT_DIR')
-    if not openssl and platform.system() == 'Darwin':
-        openssl = subprocess.check_output(['brew', '--prefix', 'openssl@3'], text=True).strip()
-    if openssl:
-        command += ['-DOPENSSL_ROOT_DIR=' + Path(openssl).as_posix()]
+    openssl = build_crypto(deps, manifest['openssl']['sha256'])
+    extension = '.lib' if platform.system() == 'Windows' else '.a'
+    # FindOpenSSL on Windows also uses the lib prefix for OpenSSL 3's MSVC build.
+    library = 'lib'
+    command += ['-DOPENSSL_ROOT_DIR=' + openssl.as_posix(),
+                '-DOPENSSL_INCLUDE_DIR=' + (openssl / 'include').as_posix(),
+                '-DOPENSSL_CRYPTO_LIBRARY=' + (openssl / 'lib' / (library + 'crypto' + extension)).as_posix(),
+                '-DOPENSSL_SSL_LIBRARY=' + (openssl / 'lib' / (library + 'ssl' + extension)).as_posix()]
+    if platform.system() == 'Darwin':
+        command += ['-DCMAKE_OSX_DEPLOYMENT_TARGET=' + MACOS_MINIMUM]
     subprocess.run(command, check=True)
     subprocess.run(['cmake', '--build', str(build), '--config', 'Release', '--parallel', '3'], check=True)
     suffix = '.exe' if platform.system() == 'Windows' else ''
@@ -89,18 +120,16 @@ def main():
     if not args.sanitize:
         shutil.copy2(binary, output / ('buggy-vpn-' + host + suffix))
     notices = []
-    licenses = {'openvpn3': 'LICENSES/MPL-2.0.txt', 'lwip': 'COPYING', 'asio': 'asio/LICENSE_1_0.txt',
+    licenses = {'openssl': 'LICENSE.txt', 'openvpn3': 'LICENSES/MPL-2.0.txt', 'lwip': 'COPYING', 'asio': 'asio/LICENSE_1_0.txt',
                 'lz4': 'lib/LICENSE', 'xxhash': 'LICENSE', 'jsoncpp': 'LICENSE'}
     for name, path in licenses.items():
         notices.append(name + '\nSource: ' + manifest[name]['url'] + '\nSHA-256: ' + manifest[name]['sha256']
                        + '\n\n' + (deps / name / path).read_text())
+    version = json.loads((ROOT / 'package.json').read_text())['version']
     notices.append('OpenVPN build adaptations: scripts/build-vpn.py guards Windows driver-only DCO types; '
                    'native/vpn/overrides omits optional host hardware metadata. Corresponding source: '
-                   'https://github.com/sparkclan123/buggy-table/tree/preview/v0.1.16/native/vpn '
-                   'and https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.16/scripts/build-vpn.py')
-    notices.append('OpenSSL 3 — https://www.openssl.org/source/ — Apache-2.0\n'
-                   'Linked statically; build provenance records the installed OpenSSL version.\n'
-                   + (SOURCE / 'OPENSSL-LICENSE.txt').read_text())
+                   f'https://github.com/sparkclan123/buggy-table/tree/preview/v{version}/native/vpn '
+                   f'and https://github.com/sparkclan123/buggy-table/blob/preview/v{version}/scripts/build-vpn.py')
     (output / 'VPN-NOTICES.txt').write_text('\n\n'.join(notices))
     print('Bundled VPN engine built:', binary)
 

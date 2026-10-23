@@ -9,36 +9,38 @@ runs:
     - name: Install native build tools (macOS)
       if: runner.os == 'macOS'
       shell: bash
-      run: brew install cmake openssl@3
+      run: brew install cmake
     - name: Install native build tools (Linux)
       if: runner.os == 'Linux'
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev
-    - name: Identify Windows crypto build cache
+      run: sudo apt-get update && sudo apt-get install -y cmake build-essential perl
+    - uses: ilammy/msvc-dev-cmd@v1
+      if: runner.os == 'Windows'
+    - uses: ilammy/setup-nasm@v1
+      if: runner.os == 'Windows'
+    - name: Use native Windows Perl
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $revision = git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD
-        "VPN_OPENSSL_CACHE=$env:VCPKG_INSTALLATION_ROOT/installed" >> $env:GITHUB_ENV
-        "VPN_OPENSSL_CACHE_KEY=vpn-openssl-$revision-$env:ImageVersion" >> $env:GITHUB_ENV
+        $perl = 'C:/Strawberry/perl/bin'
+        if (!(Test-Path "$perl/perl.exe")) { choco install strawberryperl --yes --no-progress }
+        if (!(Test-Path "$perl/perl.exe")) { throw 'Native Windows Perl is required to build OpenSSL' }
+        $perl >> $env:GITHUB_PATH
     - uses: actions/cache/restore@v4
       id: openssl-cache
-      if: runner.os == 'Windows'
       with:
-        path: ${{ env.VPN_OPENSSL_CACHE }}
-        key: ${{ env.VPN_OPENSSL_CACHE_KEY }}
-    - name: Build static OpenSSL (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows-static
-        if ($LASTEXITCODE -ne 0) { throw 'Static OpenSSL build failed' }
-        "OPENSSL_ROOT_DIR=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static" >> $env:GITHUB_ENV
-    - uses: actions/cache/save@v4
-      if: runner.os == 'Windows' && steps.openssl-cache.outputs.cache-hit != 'true'
-      with:
-        path: ${{ env.VPN_OPENSSL_CACHE }}
-        key: ${{ env.VPN_OPENSSL_CACHE_KEY }}
-    - name: Build and verify bundled engine
+        path: artifacts/native-vpn/openssl-install
+        key: vpn-crypto-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/vpn/deps.json', 'scripts/build-vpn.py') }}
+    - name: Build and verify bundled engine (Unix)
+      if: runner.os != 'Windows'
       shell: bash
       run: python scripts/build-vpn.py
+    - name: Build and verify bundled engine (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: python scripts/build-vpn.py
+    - uses: actions/cache/save@v4
+      if: always() && steps.openssl-cache.outputs.cache-hit != 'true' && hashFiles('artifacts/native-vpn/openssl-install/.built-identity') != ''
+      with:
+        path: artifacts/native-vpn/openssl-install
+        key: vpn-crypto-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/vpn/deps.json', 'scripts/build-vpn.py') }}

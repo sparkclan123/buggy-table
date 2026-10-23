@@ -22,7 +22,7 @@ Use OpenVPN TUN profiles with inline CA/certificates/keys. Username/password and
 
 ## Installation
 
-Download the matching installer and replace the old app after saving/discarding pending edits and closing it. Retain the existing app-data folder to keep saved connections and encrypted VPN profiles. The Updates button opens GitHub downloads; this Preview does not install updates automatically.
+Requires macOS 11 or newer, or Windows x64 with WebView2 (the installer supplies it if missing). Download the matching installer and replace the old app after saving/discarding pending edits and closing it. Retain the existing app-data folder to keep saved connections and encrypted VPN profiles. The Updates button opens GitHub downloads; this Preview does not install updates automatically.
 
 | Platform | Installer |
 |---|---|

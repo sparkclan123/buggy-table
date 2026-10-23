@@ -16,6 +16,12 @@ verify_app() {
   test -f "$app/Contents/_CodeSignature/CodeResources"
   # Exercise the actual packaged sidecar without developer PATH or Docker.
   env -i PATH=/usr/bin:/bin "$app/Contents/MacOS/buggy-vpn" --self-test
+  # Catch accidentally building the sidecar for the developer/runner's OS only.
+  local minimum declared
+  minimum=$(otool -l "$app/Contents/MacOS/buggy-vpn" | awk '/minos / { print $2 }')
+  declared=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")
+  test "$minimum" = '11.0'
+  test "$declared" = '11.0'
   if otool -L "$app/Contents/MacOS/buggy-vpn" | grep -E '/opt/homebrew|/usr/local|vcpkg|artifacts'; then
     echo "VPN engine contains a developer-machine library dependency" >&2
     exit 1

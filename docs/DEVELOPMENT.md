@@ -16,13 +16,13 @@ The opt-in feature keeps this test separate from the usual Compose database suit
 The installed app does not use Docker. Build its native sidecar before `pnpm desktop` or `pnpm desktop:build`:
 
 ```sh
-# macOS: brew install cmake openssl@3; Linux: install cmake and libssl-dev
+# macOS: brew install cmake; Linux: install cmake, a C/C++ compiler, make and Perl
 python3 scripts/build-vpn.py
 ```
 
-Windows uses CMake/MSVC and static OpenSSL (`vcpkg install openssl:x64-windows-static`, then pass `--openssl <prefix>`). Dependencies are fetched at build time with pinned SHA-256 checksums in `native/vpn/deps.json`; generated binaries/notices go in ignored `src-tauri/binaries`. Tauri packages the architecture-specific sidecar next to the app executable. No end-user build tools or downloads are needed.
+Windows uses CMake/MSVC, native Perl and NASM. The script builds pinned OpenSSL 3.5.9 LTS statically on every platform; it does not use Homebrew/vcpkg crypto binaries. macOS app and engine target macOS 11.0 or newer. Dependencies are fetched at build time with pinned SHA-256 checksums in `native/vpn/deps.json`; generated binaries/notices go in ignored `src-tauri/binaries`. Tauri packages the architecture-specific sidecar next to the app executable. No end-user build tools or downloads are needed.
 
-`native/vpn` combines OpenVPN 3's external-TUN interface with a process-private lwIP stack. All database TCP and private DNS packets enter that memory interface, never a host socket. Only VPN transport and the authenticated fixed-destination loopback relay use native sockets. No OS interfaces, routes, DNS settings or privileged helper are created. A process is owned by one session; stdin EOF, heartbeat expiry or process drop ends it. Source and dependency license notices are bundled. OpenVPN 3 is used under MPL-2.0; its unmodified pinned source URL is recorded in the notices.
+`native/vpn` combines OpenVPN 3's external-TUN interface with a process-private lwIP stack. All database TCP and private DNS packets enter that memory interface, never a host socket. Only VPN transport and the authenticated fixed-destination loopback relay use native sockets. No OS interfaces, routes, DNS settings or privileged helper are created. A process is owned by one session; stdin EOF, heartbeat expiry or process drop ends it. Source and dependency license notices are bundled. OpenVPN 3 is used under MPL-2.0; its pinned source URL and the small external-TUN build adaptations are recorded in the notices.
 
 `python3 scripts/build-vpn.py --sanitize` builds an ASan/UBSan engine. Use `BUGGY_VPN_BINARY=<absolute path to artifacts/native-vpn/asan/buggy-vpn>` with the opt-in integration suite. Docker is used only to host the disposable VPN/database servers in tests; the application client runs natively without access to Docker.
 
