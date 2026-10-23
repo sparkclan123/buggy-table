@@ -310,7 +310,9 @@ mod tests {
                 owner: owner.clone(),
                 id: None,
                 name: "Office".into(),
-                config: Some(format!("{CONFIG}push-peer-info\n")),
+                config: Some(format!(
+                    "{CONFIG}push-peer-info\nignore-unknown-option block-outside-dns\n"
+                )),
                 username: "user".into(),
                 password: Some("PASSWORD_CANARY".into()),
                 key_password: None,
@@ -338,6 +340,15 @@ mod tests {
                 .config
                 .lines()
                 .any(|line| line == "push-peer-info")
+        );
+        assert!(
+            restarted
+                .load(&owner, &p.id)
+                .unwrap()
+                .1
+                .config
+                .lines()
+                .any(|line| line == "ignore-unknown-option block-outside-dns")
         );
         restarted
             .put(VpnEdit {
@@ -410,6 +421,64 @@ mod tests {
                 "{option}"
             );
         }
+    }
+    #[test]
+    fn compatibility_directives_are_preserved_in_exported_profiles() {
+        for directive in [
+            "ignore-unknown-option block-outside-dns",
+            "--ignore-unknown-option block-outside-dns",
+            "  ignore-unknown-option block-outside-dns register-dns  ",
+            "ignore-unknown-option \"block-outside-dns\" # client compatibility",
+            "ignore-unknown-option data-ciphers\nignore-unknown-option block-outside-dns",
+        ] {
+            let input =
+                format!("\u{feff}{CONFIG}{directive}\nblock-outside-dns\n").replace('\n', "\r\n");
+            let validated = validate_config(&input).unwrap();
+            assert!(validated.contains(directive.trim()), "{directive}");
+            assert!(validated.ends_with("remote-cert-tls server\n"));
+        }
+    }
+    #[test]
+    fn compatibility_directives_require_option_names() {
+        for directive in [
+            "ignore-unknown-option",
+            "ignore-unknown-option # no names",
+            "ignore-unknown-option \"\"",
+            "ignore-unknown-option \"block-outside-dns register-dns\"",
+            "ignore-unknown-option /tmp/profile",
+            "ignore-unknown-option block-outside-dns *",
+        ] {
+            let error = validate_config(&format!("{CONFIG}{directive}\n")).unwrap_err();
+            assert!(error.message.contains("needs one or more option names"));
+        }
+    }
+    #[test]
+    fn compatibility_directives_do_not_bypass_import_restrictions() {
+        for directive in [
+            "up /tmp/evil",
+            "plugin malicious.so",
+            "config other.ovpn",
+            "ca /etc/secret",
+            "auth-user-pass secret.txt",
+            "dev tap",
+            "management 0.0.0.0 1234",
+            "unknown-option value",
+            "tls-verify /tmp/check",
+        ] {
+            let option = directive.split_whitespace().next().unwrap();
+            for input in [
+                format!("{CONFIG}ignore-unknown-option {option}\n{directive}\n"),
+                format!("{CONFIG}{directive}\nignore-unknown-option {option}\n"),
+            ] {
+                assert!(validate_config(&input).is_err(), "{directive}");
+            }
+        }
+        let validated = validate_config(&format!(
+            "{CONFIG}ignore-unknown-option verify-x509-name remote-cert-tls\nverify-x509-name vpn.example name\n"
+        ))
+        .unwrap();
+        assert!(validated.contains("verify-x509-name vpn.example name\n"));
+        assert!(validated.ends_with("remote-cert-tls server\n"));
     }
     #[test]
     fn unsafe_or_unsupported_profiles_are_rejected() {

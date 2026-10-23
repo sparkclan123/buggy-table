@@ -40,6 +40,8 @@ def main():
         info = json.loads(run('docker', 'inspect', name, capture_output=True).stdout)[0]
         port = info['NetworkSettings']['Ports']['1194/' + ('tcp' if i else 'udp')][0]['HostPort']
         config = f'client\ndev tun\nproto udp\nremote 127.0.0.1 {port}\nnobind\nremote-cert-tls server\npush-peer-info\n'
+        # Common cross-platform export: accepted by the importer and native core.
+        config += 'ignore-unknown-option block-outside-dns\nblock-outside-dns\n'
         if i: config = config.replace('proto udp\n', 'proto tcp-client\n') + 'auth-user-pass\ncipher AES-256-CBC\nauth SHA256\n'
         for tag, filename in [('ca', 'ca.crt'), ('cert', 'client.crt'), ('key', 'client.key')]:
             config += f'<{tag}>\n' + (OUT / filename).read_text() + f'</{tag}>\n'

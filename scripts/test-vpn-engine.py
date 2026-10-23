@@ -115,14 +115,14 @@ def main():
             finish(process)
     print('DNS and destination failures stay closed')
 
-    process, events = start(profile=config + '\nverify-x509-name wrong-vpn-identity name\n')
+    process, events = start(profile=config + '\nignore-unknown-option verify-x509-name remote-cert-tls\nverify-x509-name wrong-vpn-identity name\n')
     try:
         event = events.get(timeout=50)
         assert event['state'] == 'disconnected', event
         assert event['code'] == 'VPN_CERTIFICATE', event
     finally:
         finish(process)
-    print('Incorrect VPN server certificate identity rejected')
+    print('Incorrect VPN server certificate identity rejected even with ignore-unknown-option')
 
 
 if __name__ == '__main__':

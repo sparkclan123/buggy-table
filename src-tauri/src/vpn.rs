@@ -120,6 +120,9 @@ pub fn validate_config(config: &str) -> AppResult<String> {
         "auth-nocache",
         // Client metadata used by some servers; no scripts or file access.
         "push-peer-info",
+        // OpenVPN 3 understands this compatibility directive. It never expands
+        // this importer's allowlist: every actual directive is still checked.
+        "ignore-unknown-option",
         "cipher",
         "data-ciphers",
         "data-ciphers-fallback",
@@ -238,6 +241,20 @@ pub fn validate_config(config: &str) -> AppResult<String> {
                 return Err(failure(
                     "VPN_CONFIG",
                     "OpenVPN option push-peer-info does not accept arguments.",
+                ));
+            }
+            if option == "ignore-unknown-option"
+                && (words.len() < 2
+                    || words[1..].iter().any(|name| {
+                        !name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                            || !name
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+                    }))
+            {
+                return Err(failure(
+                    "VPN_CONFIG",
+                    "OpenVPN option ignore-unknown-option needs one or more option names, for example: ignore-unknown-option block-outside-dns.",
                 ));
             }
             if option == "auth-user-pass" && words.len() != 1 {

@@ -1,18 +1,17 @@
-buggy-table 0.1.17 — Preview
+buggy-table 0.1.18 — Preview
 
-Connect to PostgreSQL without entering a database name. Expand databases and schemas in the sidebar, then open the tables you need.
+Fix OpenVPN profile imports that failed with “Unsupported OpenVPN option: ignore-unknown-option”. Install this version and import the original .ovpn again; the compatibility directive does not need to be removed.
 
 ## Changes
 
-- Make PostgreSQL's Default database optional. Discover connectable, non-template databases through an accessible maintenance database; if none is available, enter any database your account can access.
-- Add compact +/− database and schema controls. Load schemas and tables on demand, search loaded names, and refresh individual schemas/databases without discarding open tabs or pending edits.
-- Keep database identity with every table tab, query, count, index lookup and save. Identically named tables in different databases remain separate, including after reconnecting. Existing saved layouts migrate automatically.
-- Reuse up to four idle PostgreSQL connections per server workspace. Switching back avoids another handshake while bounded eviction and disconnect close unused transports. Privileges remain checked for every operation.
-- Retain the built-in, isolated OpenVPN engine introduced in 0.1.16. No Docker Desktop, separate OpenVPN client, network driver or runtime download is needed for VPN.
+- Accept and preserve `ignore-unknown-option`, including the common `ignore-unknown-option block-outside-dns` export, multiple option names and repeated directives.
+- Validate option-name syntax with a specific error for missing or malformed names. Every actual profile directive still passes the app's existing compatibility checks; scripts, plugins and external files remain unsupported.
+- Keep certificate identity verification active even when its option name appears in an ignore list. The bundled OpenVPN 3 engine processes recognized TLS options normally.
+- Retain the built-in isolated VPN engine and PostgreSQL/MySQL browsing without a required default database. Users do not need Docker Desktop, a separate OpenVPN client or a runtime download.
 
 ## Validation
 
-Real PostgreSQL integration covers blank/default database connections, permission-filtered discovery, maintenance fallback, same-named tables across databases/schemas, quoted database names, reads/counts/indexes/overview/saves, strict-reader checks, connection reuse, eviction and cleanup. Chromium and WebKit tests cover lazy browsing, errors/retry, empty databases, independent drafts, saved tabs and both themes. Build provenance and final CI results accompany the installers in BUILD_INFO.txt.
+Regression coverage checks exported profile syntax, encrypted profile persistence, malformed input and attempts to bypass profile restrictions. Disposable UDP and TCP VPN fixtures now include this compatibility directive, exercising actual private DNS, database TLS, reused connections and certificate rejection. Build provenance and final CI results accompany the installers in BUILD_INFO.txt. Automated regression tests use synthetic profiles and disposable databases.
 
 ## Install this Preview
 
@@ -20,8 +19,8 @@ Supports macOS 11 or newer, or Windows x64 with WebView2 (the installer supplies
 
 | Platform | Installer |
 |---|---|
-| Mac Apple Silicon | `buggy-table_0.1.17_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.17_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.17_x64-setup.exe` |
+| Mac Apple Silicon | `buggy-table_0.1.18_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.18_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.18_x64-setup.exe` |
 
 Mac apps use ad-hoc signatures without Apple Developer ID/notarization; Windows builds have no Authenticode certificate. OS security prompts may still occur. Checksums and build provenance accompany the installers. Database and VPN performance depends on network latency, server workload and query design.

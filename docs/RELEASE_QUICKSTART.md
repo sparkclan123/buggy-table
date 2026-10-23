@@ -1,18 +1,18 @@
 # รัน buggy-table และปล่อยรุ่นทดสอบ
 
-รุ่น `v0.1.17` เพิ่ม PostgreSQL แบบไม่ต้องกรอก DBName พร้อมรายการฐานข้อมูล/schema กดขยาย ใช้ connection ซ้ำและเก็บแท็บแยกฐานข้อมูล VPN ฝังในแอปแล้ว ไม่ต้องติดตั้ง Docker Desktop หรือ OpenVPN แยก มี Mac Apple Silicon, Mac Intel และ Windows x64 รุ่นนี้เป็น **Pre-release** ไม่มี Apple Developer ID/notarization หรือ Windows Authenticode และต้องติดตั้งทับเอง
+รุ่น `v0.1.18` แก้การนำเข้าไฟล์ OpenVPN ที่มี `ignore-unknown-option` โดยยังตรวจใบรับรองและข้อจำกัดของโปรไฟล์ตามเดิม รวมความสามารถ PostgreSQL/MySQL แบบไม่ต้องกรอก DBName VPN ฝังในแอปแล้ว ไม่ต้องติดตั้ง Docker Desktop หรือ OpenVPN แยก มี Mac Apple Silicon, Mac Intel และ Windows x64 รุ่นนี้เป็น **Pre-release** ไม่มี Apple Developer ID/notarization หรือ Windows Authenticode และต้องติดตั้งทับเอง
 
-ดาวน์โหลดที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.17
+ดาวน์โหลดที่ https://github.com/sparkclan123/buggy-table-releases/releases/tag/v0.1.18
 
 | เครื่อง | ไฟล์ |
 |---|---|
-| Mac Apple Silicon (M series) | `buggy-table_0.1.17_aarch64.dmg` |
-| Mac Intel | `buggy-table_0.1.17_x64.dmg` |
-| Windows x64 | `buggy-table_0.1.17_x64-setup.exe` |
+| Mac Apple Silicon (M series) | `buggy-table_0.1.18_aarch64.dmg` |
+| Mac Intel | `buggy-table_0.1.18_x64.dmg` |
+| Windows x64 | `buggy-table_0.1.18_x64-setup.exe` |
 
 VPN รองรับ OpenVPN TUN แบบ inline `.ovpn` ไม่รองรับ TAP, browser SSO หรือ interactive MFA ไม่มีการดาวน์โหลด runtime เมื่อใช้งาน ดู [วิธีตั้งค่าและข้อจำกัด](CONNECTIONS.md#openvpn-แยกต่อฐานข้อมูล) MySQL และ Redis ยังอ่านอย่างเดียว รายละเอียดการตรวจและแหล่ง build อยู่ใน BUILD_INFO.txt ของแต่ละ release
 
-**รุ่น 0.1.4–0.1.17 ปิด updater ไว้** ผู้ใช้ต้องดาวน์โหลดติดตั้งทับด้วยตนเอง การเผยแพร่ release ไม่สามารถเปิด updater ในแอปที่ติดตั้งไปแล้ว ก่อนติดตั้งให้บันทึกหรือยกเลิกงานค้างและปิดแอป Windows ให้รัน installer และเลือกตำแหน่งติดตั้งเดิม
+**รุ่น 0.1.4–0.1.18 ปิด updater ไว้** ผู้ใช้ต้องดาวน์โหลดติดตั้งทับด้วยตนเอง การเผยแพร่ release ไม่สามารถเปิด updater ในแอปที่ติดตั้งไปแล้ว ก่อนติดตั้งให้บันทึกหรือยกเลิกงานค้างและปิดแอป Windows ให้รัน installer และเลือกตำแหน่งติดตั้งเดิม
 
 ผู้ใช้ทั่วไปไม่ต้องลง Rust หรือ Node.js บน Mac ให้เปิด DMG แล้วลาก buggy-table ไป Applications แทนตัวเก่า โดยไม่ลบโฟลเดอร์ข้อมูลแอป ค่าการเชื่อมต่อเดิมยังอยู่
 
@@ -51,7 +51,7 @@ open src-tauri/target/release/bundle/dmg
 
 เครื่อง Apple Silicon จะได้ตัวติดตั้ง ARM ส่วน Intel/Windows ให้ build บน GitHub Actions ตามหัวข้อถัดไป คำสั่งนี้ไม่เปิด updater และไม่ใช้ signing Secrets
 
-## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.17
+## ปล่อยรุ่นทดสอบถัดไป เช่น 0.1.18
 
 ใช้ Terminal บน Mac เครื่องนี้ ไม่ต้องรันบน Windows (workflow อยู่ใน branch `main` ):
 
@@ -61,7 +61,7 @@ source "$HOME/.nvm/nvm.sh"
 nvm use
 git switch main
 git pull --ff-only
-pnpm release:version 0.1.17
+pnpm release:version 0.1.18
 ```
 
 แก้ `docs/RELEASE_NOTES.md` ให้ตรงรุ่น แล้วตรวจและ commit:
@@ -70,11 +70,11 @@ pnpm release:version 0.1.17
 pnpm release:check
 pnpm check
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock docs/RELEASE_NOTES.md
-git commit -m "Prepare 0.1.17 preview"
+git commit -m "Prepare 0.1.18 preview"
 git push origin main
-git tag -a preview/v0.1.17 -m "buggy-table 0.1.17 preview"
-git push origin preview/v0.1.17
-gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.17
+git tag -a preview/v0.1.18 -m "buggy-table 0.1.18 preview"
+git push origin preview/v0.1.18
+gh workflow run installers.yml --repo sparkclan123/buggy-table --ref preview/v0.1.18
 gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 ```
 
@@ -82,24 +82,24 @@ gh run list --repo sparkclan123/buggy-table --workflow installers.yml --limit 5
 
 ```sh
 gh run watch RUN_ID --repo sparkclan123/buggy-table --exit-status
-gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.17
+gh run download RUN_ID --repo sparkclan123/buggy-table --dir artifacts/preview-v0.1.18
 ```
 
 ทำต่อเฉพาะเมื่อ **ทั้งสามแพลตฟอร์มสำเร็จ** แล้วรวบรวมไฟล์และ checksum:
 
 ```sh
-mkdir -p artifacts/release-v0.1.17
-cp artifacts/preview-v0.1.17/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.17/
-cp artifacts/preview-v0.1.17/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.17/
-cp artifacts/preview-v0.1.17/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.17/
-(cd artifacts/release-v0.1.17 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
-gh release create v0.1.17 artifacts/release-v0.1.17/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.17 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
+mkdir -p artifacts/release-v0.1.18
+cp artifacts/preview-v0.1.18/TEST-ONLY-mac-arm64/dmg/*.dmg artifacts/release-v0.1.18/
+cp artifacts/preview-v0.1.18/TEST-ONLY-mac-intel/dmg/*.dmg artifacts/release-v0.1.18/
+cp artifacts/preview-v0.1.18/TEST-ONLY-windows-x64/nsis/*.exe artifacts/release-v0.1.18/
+(cd artifacts/release-v0.1.18 && shasum -a 256 *.dmg *.exe > SHA256SUMS.txt)
+gh release create v0.1.18 artifacts/release-v0.1.18/* --repo sparkclan123/buggy-table-releases --target main --title "buggy-table 0.1.18 — Preview" --notes-file docs/RELEASE_NOTES.md --prerelease --draft
 ```
 
 ตรวจไฟล์ใน draft และ release notes ต้องระบุว่า **ไม่มีใบรับรอง OS และไม่มี updater** แล้วจึงเผยแพร่:
 
 ```sh
-gh release edit v0.1.17 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
+gh release edit v0.1.18 --repo sparkclan123/buggy-table-releases --draft=false --prerelease --latest=false
 ```
 
 การเผยแพร่ทำให้ทุกคนดาวน์โหลดได้ ไม่แก้ทับไฟล์รุ่นที่เผยแพร่แล้ว หากแก้แอปให้ขึ้นเลขเวอร์ชันใหม่

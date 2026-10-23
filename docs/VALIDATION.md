@@ -1,5 +1,12 @@
 # Validation history
 
+## OpenVPN compatibility directive — 0.1.18 Preview, 2026-10-23
+
+- Seven VPN importer/store cases passed, including three new regression cases for `ignore-unknown-option`: repeated directives, multiple names, quoted names, comments, BOM/CRLF exports, missing/malformed names and blocked scripts/plugins/external files regardless of directive order. Encrypted storage preserves the option across a store restart.
+- Real native engine contract checks passed with the compatibility directive in disposable profiles: private DNS and IPv4/IPv6 TCP, authenticated relay, missing DNS without host fallback, wrong credentials, encrypted private keys, parent-exit cleanup and wrong certificate identity rejection even when `verify-x509-name`/`remote-cert-tls` appear in an ignore list.
+- The two-network application integration passed on macOS ARM64 with modified UDP and TCP profiles: overlapping private DNS/IPs, database TLS, large results, reused/concurrent reads, tunnel replacement and independent failure. Thirty alternating local fixture reads had a 3.50 ms median and 4.94 ms p95; these are synthetic local measurements, not production latency claims.
+- Rust unit/contract tests, frontend production build/Svelte checks, formatting, Clippy with warnings denied and release consistency checks passed locally. Cross-platform CI results and installer checks are recorded in the release BUILD_INFO.txt. No user profile, endpoint, database credential or private diagnostic output is included in source or release assets.
+
 ## PostgreSQL server browsing — 0.1.17 Preview, 2026-10-23
 
 - 144 Chromium/WebKit UI cases passed locally, including blank PostgreSQL database input, lazy database/schema expansion, empty databases, catalog retry, names such as `__proto__`, refresh/removal, independent drafts and database-scoped tab restore. Light/dark screenshots were visually inspected. Browser database cases use IPC doubles.
