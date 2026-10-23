@@ -404,7 +404,7 @@ public:
         if (event.name == "AUTH_FAILED" || event.name == "DYNAMIC_CHALLENGE") code = "VPN_AUTH";
         else if (event.name == "CERT_VERIFY_FAIL" || event.name == "TLS_ERROR") code = "VPN_CERTIFICATE";
         else if (event.name == "CONNECTION_TIMEOUT") code = "VPN_TIMEOUT";
-        if (event.fatal || event.name == "AUTH_FAILED" || event.name == "DYNAMIC_CHALLENGE"
+        if (event.fatal || event.name == "AUTH_FAILED" || event.name == "DYNAMIC_CHALLENGE" || event.name == "CONNECTION_TIMEOUT"
             || (connected && (event.name == "RECONNECTING" || event.name == "DISCONNECTED"))) {
             if (!reported) emit("disconnected", code);
             reported = true;
@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
         for (const auto& dns : data["dns"]) client.settings.dns.push_back(dns.asString());
         if (client.settings.host.empty() || client.settings.host.size() > 253 || !client.settings.port || client.settings.token.size() != 64) return 1;
         ClientAPI::Config config;
-        config.content = data["config"].asString() + "\ndev tun\n";
+        config.content = data["config"].asString() + "\ndev tun\nping 10\nping-restart 40\n";
         config.privateKeyPassword = data["keyPassword"].asString();
         config.connTimeout = 45; config.clockTickMS = 1000;
         config.googleDnsFallback = false; config.retryOnAuthFailed = false;
