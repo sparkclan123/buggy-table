@@ -52,6 +52,24 @@ def main():
         (unpack / root).rename(destination)
         unpack.rmdir()
         marker.write_text(spec['sha256'])
+    # Upstream 3.11.8 includes Windows driver-only DCO types even when using an
+    # external TUN factory. Generate narrowly adapted headers from the verified
+    # originals; preserve upstream licenses and fail if the pinned code changes.
+    external_tun_guard = '#if defined(OPENVPN_PLATFORM_WIN) && !defined(OPENVPN_EXTERNAL_TUN_FACTORY)'
+    adapters = {
+        'openvpn/transport/dco.hpp': ('#if defined(OPENVPN_PLATFORM_WIN)', external_tun_guard, 2),
+        'openvpn/client/cliopt.hpp': (
+            '#if defined(OPENVPN_PLATFORM_WIN)\n            if (config.clientconf.tunPersist)',
+            external_tun_guard + '\n            if (config.clientconf.tunPersist)', 1),
+    }
+    for path, (original, replacement, count) in adapters.items():
+        content = (deps / 'openvpn3' / path).read_text()
+        if content.count(original) != count:
+            raise RuntimeError('OpenVPN external TUN adapter no longer matches: ' + path)
+        output_header = CACHE / 'overrides' / path
+        output_header.parent.mkdir(parents=True, exist_ok=True)
+        output_header.write_text('// Modified by buggy-table: omit Windows OS driver types for external TUN.\n'
+                                 + content.replace(original, replacement))
     build = CACHE / ('asan' if args.sanitize else 'build')
     command = ['cmake', '-S', str(SOURCE), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
                '-DVPN_DEPS=' + deps.as_posix(), '-DVPN_SANITIZE=' + ('ON' if args.sanitize else 'OFF')]
@@ -76,6 +94,10 @@ def main():
     for name, path in licenses.items():
         notices.append(name + '\nSource: ' + manifest[name]['url'] + '\nSHA-256: ' + manifest[name]['sha256']
                        + '\n\n' + (deps / name / path).read_text())
+    notices.append('OpenVPN build adaptations: scripts/build-vpn.py guards Windows driver-only DCO types; '
+                   'native/vpn/overrides omits optional host hardware metadata. Corresponding source: '
+                   'https://github.com/sparkclan123/buggy-table/tree/preview/v0.1.16/native/vpn '
+                   'and https://github.com/sparkclan123/buggy-table/blob/preview/v0.1.16/scripts/build-vpn.py')
     notices.append('OpenSSL 3 — https://www.openssl.org/source/ — Apache-2.0\n'
                    'Linked statically; build provenance records the installed OpenSSL version.\n'
                    + (SOURCE / 'OPENSSL-LICENSE.txt').read_text())

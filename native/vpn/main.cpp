@@ -13,6 +13,11 @@ extern "C" {
 #include <lwip/tcp.h>
 #include <lwip/dns.h>
 #include <lwip/timeouts.h>
+#include <lwip/prot/dns.h>
+#include <lwip/prot/ip4.h>
+#include <lwip/prot/ip6.h>
+#include <lwip/prot/tcp.h>
+int vpn_stack_self_test(void);
 }
 #include <array>
 #include <algorithm>
@@ -28,6 +33,10 @@ extern "C" {
 using Clock = std::chrono::steady_clock;
 using Tcp = openvpn_io::ip::tcp;
 using namespace openvpn;
+static_assert(sizeof(ip_hdr) == IP_HLEN && alignof(ip_hdr) == 1);
+static_assert(sizeof(ip6_hdr) == IP6_HLEN && alignof(ip6_hdr) == 1);
+static_assert(sizeof(tcp_hdr) == TCP_HLEN && alignof(tcp_hdr) == 1);
+static_assert(sizeof(dns_hdr) == SIZEOF_DNS_HDR && alignof(dns_hdr) == 1);
 static const auto epoch = Clock::now();
 extern "C" u32_t sys_now(void) {
     return static_cast<u32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - epoch).count());
@@ -425,6 +434,7 @@ int main(int argc, char** argv) {
     try {
         lwip_init();
         if (argc == 2 && std::string(argv[1]) == "--self-test") {
+            if (!vpn_stack_self_test()) return 1;
             ip_addr_t ip{};
             if (!ipaddr_aton("127.0.0.1", &ip) || safe_ip(ip)) return 1;
             if (!ipaddr_aton("10.77.0.1", &ip) || !safe_ip(ip)) return 1;

@@ -2,6 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#ifdef _MSC_VER
+#define PACK_STRUCT_BEGIN __pragma(pack(push, 1))
+#define PACK_STRUCT_END __pragma(pack(pop))
+#define PACK_STRUCT_STRUCT
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
